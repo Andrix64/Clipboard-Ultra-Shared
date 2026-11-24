@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading.Channels;
+using Cus.Core.Abstractions;
 using Cus.Core.Identity;
 
 namespace Cus.Core.Net;
@@ -15,13 +17,28 @@ public sealed class PeerConnection : IAsyncDisposable
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Tempo massimo per consegnare un messaggio al socket. Un peer che non legge più (o legge
+    /// apposta troppo piano) fa scadere l'invio: la connessione si chiude invece di bloccare chi invia.
+    /// </summary>
+    public static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>Messaggi ricevuti in attesa dell'handler: oltre, la lettura si ferma finché l'handler non recupera.</summary>
+    private const int HandlerQueueCapacity = 256;
+
     private readonly SecureChannel _channel;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<CusMessage>> _pending = new();
     private long _nextRequestId;
     private long _lastReceivedTicks = Environment.TickCount64;
+    private readonly Lock _closeGate = new();
+    private readonly Channel<CusMessage> _handlerQueue = Channel.CreateBounded<CusMessage>(
+        new BoundedChannelOptions(HandlerQueueCapacity) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
+    private Action<PeerConnection, string>? _closedHandlers;
+    private string? _closeReason;
     private int _closed;
     private Task? _receiveLoop;
+    private Task? _handlerLoop;
     private Task? _pingLoop;
 
     private PeerConnection(SecureChannel channel, DeviceInfo remote, EndPoint? remoteEndPoint, bool isInitiator)
@@ -49,8 +66,32 @@ public sealed class PeerConnection : IAsyncDisposable
     /// <summary>Messaggi che non sono risposte. Gestiti uno alla volta, nell'ordine di arrivo.</summary>
     public Func<PeerConnection, CusMessage, Task>? MessageHandler { get; set; }
 
-    /// <summary>Chiamato una sola volta alla chiusura, con il motivo.</summary>
-    public event Action<PeerConnection, string>? Closed;
+    /// <summary>
+    /// Chiamato una sola volta alla chiusura, con il motivo. Chi si iscrive a connessione già chiusa
+    /// viene chiamato subito: nessuna chiusura va persa.
+    /// </summary>
+    public event Action<PeerConnection, string>? Closed
+    {
+        add
+        {
+            string? reason;
+            lock (_closeGate)
+            {
+                reason = _closeReason;
+                if (reason is null)
+                    _closedHandlers += value;
+            }
+
+            if (reason is not null && value is not null)
+                InvokeClosed(value, reason);
+        }
+
+        remove
+        {
+            lock (_closeGate)
+                _closedHandlers -= value;
+        }
+    }
 
     public CancellationToken Lifetime => _lifetime.Token;
 
@@ -84,6 +125,7 @@ public sealed class PeerConnection : IAsyncDisposable
     public void Start()
     {
         IsStarted = true;
+        _handlerLoop = Task.Run(HandlerLoopAsync);
         _receiveLoop = Task.Run(ReceiveLoopAsync);
         _pingLoop = Task.Run(PingLoopAsync);
     }
@@ -104,14 +146,18 @@ public sealed class PeerConnection : IAsyncDisposable
         return message as T ?? throw new ProtocolException($"Atteso {typeof(T).Name}, ricevuto {message.GetType().Name}.");
     }
 
+    /// <exception cref="MessageTooLargeException">Il messaggio serializzato non entra in un frame: non inviato, connessione intatta.</exception>
+    /// <exception cref="IOException">Connessione chiusa o invio fallito (anche per <see cref="SendTimeout"/>).</exception>
     public async Task SendAsync(CusMessage message, CancellationToken cancellationToken = default)
     {
         if (IsClosed)
             throw new IOException($"Connessione con {Remote.DisplayName} chiusa.");
+        var payload = message.Serialize();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        cts.CancelAfter(SendTimeout);
         try
         {
-            await _channel.SendAsync(message.Serialize(), cts.Token);
+            await _channel.SendAsync(payload, cts.Token);
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -152,13 +198,33 @@ public sealed class PeerConnection : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
+        reason ??= "chiusura";
         _lifetime.Cancel();
+        _handlerQueue.Writer.TryComplete();
         foreach (var pending in _pending.Values)
             pending.TrySetCanceled();
         _ = _channel.DisposeAsync().AsTask();
+
+        Action<PeerConnection, string>? handlers;
+        lock (_closeGate)
+        {
+            _closeReason = reason;
+            handlers = _closedHandlers;
+            _closedHandlers = null;
+        }
+
+        if (handlers is not null)
+        {
+            foreach (var handler in handlers.GetInvocationList().Cast<Action<PeerConnection, string>>())
+                InvokeClosed(handler, reason);
+        }
+    }
+
+    private void InvokeClosed(Action<PeerConnection, string> handler, string reason)
+    {
         try
         {
-            Closed?.Invoke(this, reason);
+            handler(this, reason);
         }
         catch (Exception ex)
         {
@@ -185,7 +251,7 @@ public sealed class PeerConnection : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Close("chiusura");
-        foreach (var task in new[] { _receiveLoop, _pingLoop })
+        foreach (var task in new[] { _receiveLoop, _handlerLoop, _pingLoop })
         {
             if (task is not null)
                 await task.ConfigureAwait(false);
@@ -203,8 +269,8 @@ public sealed class PeerConnection : IAsyncDisposable
                 ?? throw new ProtocolException("Atteso il saluto iniziale.");
             var remote = new DeviceInfo(
                 channel.RemoteDeviceId,
-                Limit(hello.DisplayName, 64),
-                Limit(hello.UserName, 64),
+                DisplayText.Sanitize(hello.DisplayName, 64),
+                DisplayText.Sanitize(hello.UserName, 64, ""),
                 channel.RemoteIdentityKey);
             return new PeerConnection(channel, remote, endPoint, isInitiator) { RemoteListenPort = hello.ListenPort };
         }
@@ -214,9 +280,6 @@ public sealed class PeerConnection : IAsyncDisposable
             throw;
         }
     }
-
-    private static string Limit(string value, int max) =>
-        string.IsNullOrWhiteSpace(value) ? "(senza nome)" : value.Length <= max ? value : value[..max];
 
     private async Task ReceiveLoopAsync()
     {
@@ -233,15 +296,17 @@ public sealed class PeerConnection : IAsyncDisposable
                     case PingMessage:
                         continue;
                     case ByeMessage bye:
-                        reason = bye.Reason;
+                        reason = DisplayText.Sanitize(bye.Reason, 200, "chiusura dall'altra parte");
                         return;
                     case IReplyMessage reply when _pending.TryRemove(reply.RequestId, out var tcs):
                         tcs.TrySetResult(message);
                         continue;
                 }
 
-                if (MessageHandler is { } handler)
-                    await handler(this, message);
+                // Gli handler girano in un ciclo a parte: un handler lento (per esempio una scrittura
+                // nella clipboard in attesa) non deve fermare risposte e ping, altrimenti una richiesta
+                // fatta mentre l'handler aspetta riceverebbe la risposta solo dopo il timeout.
+                await _handlerQueue.Writer.WriteAsync(message, _lifetime.Token);
             }
         }
         catch (OperationCanceledException)
@@ -264,6 +329,36 @@ public sealed class PeerConnection : IAsyncDisposable
         finally
         {
             Close(reason);
+        }
+    }
+
+    private async Task HandlerLoopAsync()
+    {
+        try
+        {
+            await foreach (var message in _handlerQueue.Reader.ReadAllAsync())
+            {
+                if (_lifetime.IsCancellationRequested)
+                    return;
+                if (MessageHandler is { } handler)
+                    await handler(this, message);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            Close("connessione interrotta");
+        }
+        catch (ProtocolException ex)
+        {
+            Close($"errore di protocollo: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"CUS: errore nella gestione di un messaggio da {Remote.DisplayName}: {ex}");
+            Close($"errore interno: {ex.Message}");
         }
     }
 

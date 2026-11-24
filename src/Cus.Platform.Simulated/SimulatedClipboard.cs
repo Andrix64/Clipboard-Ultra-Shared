@@ -56,12 +56,15 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
         if (content is not { Kind: ClipboardContentKind.Files, Files: { } files })
             throw new InvalidOperationException("La clipboard non contiene file.");
 
+        if (!ClipboardFileNames.TryValidate(files, out var reason))
+            throw new InvalidDataException($"Elenco di file non valido: {reason}.");
+
         var written = new List<string>();
-        var root = Path.GetFullPath(targetDirectory);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory)) + Path.DirectorySeparatorChar;
         for (var i = 0; i < files.Count; i++)
         {
             var target = Path.GetFullPath(Path.Combine(root, files[i].Name.Replace('/', Path.DirectorySeparatorChar)));
-            if (!target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Nome di file non valido: '{files[i].Name}'.");
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
 
@@ -77,6 +80,8 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
                 {
                     var count = (int)Math.Min(1024 * 1024, files[i].SizeBytes - offset);
                     var chunk = await source!.ReadAsync(i, offset, count, cancellationToken);
+                    if (chunk.Length > count)
+                        chunk = chunk[..count];
                     if (chunk.Length == 0)
                         throw new RemoteFileUnavailableException("Il PC d'origine ha restituito un blocco vuoto.");
                     await output.WriteAsync(chunk, cancellationToken);

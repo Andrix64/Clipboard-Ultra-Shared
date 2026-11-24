@@ -57,6 +57,43 @@ public class PngCodecTests
         Assert.Throws<InvalidDataException>(() => PngCodec.Decode("non un png"u8));
     }
 
+    [Fact]
+    public void Decode_DecompressionBomb_InflatesOnlyWhatTheHeaderNeeds()
+    {
+        // 1×1 dichiarato, ma l'IDAT si decomprime in 200 MB di zeri.
+        var bomb = BuildPng(1, 1, 8, 6, new byte[200 * 1024 * 1024]);
+        Assert.True(bomb.Length < 1024 * 1024);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var image = PngCodec.Decode(bomb);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal((1, 1), (image.Width, image.Height));
+        Assert.True(allocated < 16 * 1024 * 1024, $"allocati {allocated:N0} byte");
+    }
+
+    [Fact]
+    public void Decode_RejectsImagesOverMaxPixels_BeforeInflating()
+    {
+        var png = BuildPng(5000, 5000, 8, 6, [0]);
+
+        Assert.True(PngCodec.TryReadSize(png, out var width, out var height));
+        Assert.Equal((5000, 5000), (width, height));
+        Assert.Throws<InvalidDataException>(() => PngCodec.Decode(png, maxPixels: 1_000_000));
+    }
+
+    [Fact]
+    public void Decode_ShortIhdr_IsInvalidData()
+    {
+        using var output = new MemoryStream();
+        output.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+        Chunk(output, "IHDR", [0, 0, 0, 1]);
+        Chunk(output, "IEND", []);
+
+        Assert.Throws<InvalidDataException>(() => PngCodec.Decode(output.ToArray()));
+        Assert.False(PngCodec.TryReadSize(output.ToArray(), out _, out _));
+    }
+
     private static byte[] BuildPng(int width, int height, byte bitDepth, byte colorType, byte[] raw,
         byte[]? palette = null, byte[]? trns = null, byte interlace = 0)
     {

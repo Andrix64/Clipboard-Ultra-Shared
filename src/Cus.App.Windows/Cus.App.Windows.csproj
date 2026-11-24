@@ -8,6 +8,7 @@
     <RootNamespace>Cus.App.Windows</RootNamespace>
     <AssemblyName>cus</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\Cus.UI\Assets\cus.ico</ApplicationIcon>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 

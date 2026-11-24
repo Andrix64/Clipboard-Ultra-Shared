@@ -53,9 +53,25 @@ public static class PngCodec
         return output.ToArray();
     }
 
-    /// <exception cref="InvalidDataException">PNG malformato.</exception>
+    /// <summary>Limite di default dei pixel accettati da <see cref="Decode"/>.</summary>
+    public const long DefaultMaxPixels = 100_000_000;
+
+    /// <summary>Legge larghezza e altezza dall'IHDR senza decodificare. False se non è un PNG valido.</summary>
+    public static bool TryReadSize(ReadOnlySpan<byte> png, out int width, out int height)
+    {
+        width = height = 0;
+        if (png.Length < 8 + 8 + 13 || !png[..8].SequenceEqual(Signature)
+            || BinaryPrimitives.ReadInt32BigEndian(png[8..]) < 13 || !png.Slice(12, 4).SequenceEqual("IHDR"u8))
+            return false;
+        width = BinaryPrimitives.ReadInt32BigEndian(png[16..]);
+        height = BinaryPrimitives.ReadInt32BigEndian(png[20..]);
+        return width > 0 && height > 0;
+    }
+
+    /// <param name="maxPixels">Oltre questo numero di pixel il PNG si rifiuta senza allocare nulla.</param>
+    /// <exception cref="InvalidDataException">PNG malformato o troppo grande.</exception>
     /// <exception cref="NotSupportedException">Variante PNG non supportata (per esempio Adam7).</exception>
-    public static RgbaImage Decode(ReadOnlySpan<byte> png)
+    public static RgbaImage Decode(ReadOnlySpan<byte> png, long maxPixels = DefaultMaxPixels)
     {
         if (png.Length < 8 || !png[..8].SequenceEqual(Signature))
             throw new InvalidDataException("Non è un PNG.");
@@ -78,6 +94,8 @@ public static class PngCodec
             switch (type)
             {
                 case "IHDR":
+                    if (length < 13)
+                        throw new InvalidDataException("Chunk IHDR troppo corto.");
                     width = BinaryPrimitives.ReadInt32BigEndian(data);
                     height = BinaryPrimitives.ReadInt32BigEndian(data[4..]);
                     bitDepth = data[8];
@@ -100,8 +118,8 @@ public static class PngCodec
             }
         }
 
-        if (width <= 0 || height <= 0 || (long)width * height > 100_000_000)
-            throw new InvalidDataException("Dimensioni PNG non valide.");
+        if (width <= 0 || height <= 0 || (long)width * height > Math.Min(maxPixels, DefaultMaxPixels))
+            throw new InvalidDataException("Dimensioni PNG non valide o troppo grandi.");
 
         var channels = colorType switch
         {
@@ -119,19 +137,21 @@ public static class PngCodec
 
         var bitsPerPixel = channels * bitDepth;
         var bytesPerPixel = Math.Max(1, bitsPerPixel / 8);
-        var stride = (width * bitsPerPixel + 7) / 8;
+        var longStride = ((long)width * bitsPerPixel + 7) / 8;
+        var expected = (longStride + 1) * height;
+        if (expected > Array.MaxLength)
+            throw new InvalidDataException("PNG troppo grande.");
+        var stride = (int)longStride;
 
-        byte[] raw;
+        // Si decomprime al massimo quanto serve: i dati in più (una "bomba" di compressione) non
+        // vengono mai letti.
+        var raw = new byte[expected];
         idat.Position = 0;
         using (var zlib = new ZLibStream(idat, CompressionMode.Decompress))
-        using (var inflated = new MemoryStream())
         {
-            zlib.CopyTo(inflated);
-            raw = inflated.ToArray();
+            if (zlib.ReadAtLeast(raw, raw.Length, throwOnEndOfStream: false) < raw.Length)
+                throw new InvalidDataException("Dati PNG insufficienti.");
         }
-
-        if (raw.Length < (long)(stride + 1) * height)
-            throw new InvalidDataException("Dati PNG insufficienti.");
 
         var pixels = new byte[width * height * 4];
         var previous = new byte[stride];

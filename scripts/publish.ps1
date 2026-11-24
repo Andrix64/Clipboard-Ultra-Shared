@@ -15,19 +15,27 @@
     ./scripts/publish.ps1 -SkipInstaller   # solo la cartella pubblicata
 #>
 param(
+    # Semver: finisce in -p:Version e nel nome dell'installer, niente altri caratteri.
+    [ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')]
     [string]$Version = '0.1.0',
+    [ValidateSet('win-x64', 'win-arm64')]
     [string]$Runtime = 'win-x64',
     [switch]$SkipInstaller,
     [string]$Iscc
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$artifacts = [System.IO.Path]::GetFullPath((Join-Path $root 'artifacts'))
 $project = Join-Path $root 'src/Cus.App.Windows/Cus.App.Windows.csproj'
-$publishDir = Join-Path $root "artifacts/publish/$Runtime"
-$installerDir = Join-Path $root 'artifacts/installer'
+$publishDir = [System.IO.Path]::GetFullPath((Join-Path $artifacts "publish/$Runtime"))
+$installerDir = Join-Path $artifacts 'installer'
 
-if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
+# La cartella da svuotare deve stare dentro <root>/artifacts: mai cancellare altro per un parametro sbagliato.
+if (-not $publishDir.StartsWith($artifacts + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Cartella di pubblicazione fuori da ${artifacts}: $publishDir"
+}
+if (Test-Path -LiteralPath $publishDir) { Remove-Item -LiteralPath $publishDir -Recurse -Force }
 
 dotnet publish $project -c Release -r $Runtime --self-contained true `
     -p:Version=$Version -p:DebugType=none -o $publishDir
@@ -40,16 +48,19 @@ Write-Host "Pubblicato in $publishDir"
 if ($SkipInstaller) { return }
 
 if (-not $Iscc) {
-    $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    # Solo cartelle di Program Files (scrivibili solo dagli amministratori): né il PATH né
+    # %LOCALAPPDATA%, dove qualunque programma dell'utente potrebbe mettere un ISCC.exe falso.
     $candidates = @(
-        $cmd.Source
         "$env:ProgramFiles\Inno Setup 7\ISCC.exe"
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-        "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe"
-        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-    ) | Where-Object { $_ -and (Test-Path $_) }
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
     $Iscc = $candidates | Select-Object -First 1
-    if (-not $Iscc) { throw 'ISCC.exe non trovato: installa Inno Setup o passa -Iscc <percorso>.' }
+    if (-not $Iscc) { throw 'ISCC.exe non trovato in Program Files: installa Inno Setup o passa -Iscc <percorso>.' }
+}
+elseif (-not (Test-Path -LiteralPath $Iscc -PathType Leaf)) {
+    throw "ISCC.exe non trovato: $Iscc"
 }
 
 & $Iscc "/DAppVersion=$Version" "/DSourceDir=$publishDir" "/DOutputDir=$installerDir" `

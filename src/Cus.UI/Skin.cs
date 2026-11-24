@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform;
 
 namespace Cus.UI;
 
@@ -22,6 +23,10 @@ public static class Skin
     public static readonly Color Alert = Color.Parse("#FF5A3C");
 
     public static readonly FontFamily LcdFont = new("Cascadia Mono, Consolas, Courier New, monospace");
+
+    /// <summary>Icona delle finestre che compaiono nella barra delle applicazioni.</summary>
+    public static WindowIcon AppIcon => s_appIcon ??= new WindowIcon(AssetLoader.Open(new Uri("avares://Cus.UI/Assets/cus.ico")));
+    private static WindowIcon? s_appIcon;
 
     public static IBrush ChassisBrush { get; } = new LinearGradientBrush
     {

@@ -20,6 +20,12 @@
     <PackageVersion Include="libsodium" Version="1.0.22" />
   </ItemGroup>
 
+  <ItemGroup Label="Strumenti">
+    <!-- Solo per scripts/make-icon.cs (genera src/Cus.UI/Assets/cus.ico). Stessa versione che
+         Avalonia.Skia porta già nell'app: nessuna libreria nuova nel prodotto. -->
+    <PackageVersion Include="SkiaSharp" Version="3.119.4" />
+  </ItemGroup>
+
   <ItemGroup Label="Test">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

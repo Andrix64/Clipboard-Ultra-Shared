@@ -36,6 +36,15 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
 - **Indirizzi dei PC abbinati:** si memorizzano (porta di ascolto inclusa nel saluto) per consegnare revoche e abbinamenti anche senza scoperta automatica.
 - **Indicatore:** finestre Avalonia, una per monitor, rese non attivabili e fuori da Alt+Tab via Win32 (`Cus.App.Windows/NativeWindowStyle.cs`). In modalità simulata non compare, per non sovrapporre gli indicatori di più istanze; lo stato si vede nel display della finestra.
 - **Interfaccia:** skin "lettore retrò" (telaio metallico, display LCD lime, pulsanti tondi), definito in `Cus.UI/Skin.cs` e `Cus.UI/SkinStyles.axaml`.
+- **Indurimento dopo la revisione di sicurezza (2026-11-24):**
+  - un invito a un peer scelto dall'elenco verifica che il canale appartenga al `DeviceId` annunciato; gli annunci si tengono per ID + indirizzo, così uno falso non sostituisce quello vero;
+  - i nomi dei file ricevuti si validano (`Cus.Core/Abstractions/ClipboardFileNames.cs`): niente `..`, `\`, `:`, nomi di dispositivo, oltre 10.000 file o 32 livelli; un elenco non valido si rifiuta per intero;
+  - i nomi che arrivano dalla rete passano da `DisplayText.Sanitize` (niente a capo, controllo, bidi);
+  - i messaggi oltre `SecureChannel.MaxMessageBytes` si rifiutano prima di cifrarli e la connessione resta valida; il JSON usa l'escaping "rilassato" (gli accenti non diventano `\uXXXX`);
+  - frame pre-autenticazione limitati alla dimensione attesa, massimo 16 connessioni in ingresso in fase iniziale, una sola richiesta di consenso alla volta, timeout di 15 s su ogni invio, letture di file servite al massimo 8 alla volta;
+  - gli handler dei messaggi girano in un ciclo separato dalla lettura del socket: risposte e ping non aspettano più un handler lento;
+  - **cronologia ai membri:** solo le voci della sessione in corso, e come anteprime (`HistoryEntry.Preview`); la voce completa si chiede all'host (`HistoryItemRequestMessage`) quando la si usa. L'host continua a vedere tutte le voci salvate;
+  - abbinamento: chi inserisce il codice verifica la conferma dell'altro PC prima di mandare la propria.
 
 ### Come provare a mano
 

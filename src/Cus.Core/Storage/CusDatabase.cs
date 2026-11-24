@@ -267,14 +267,37 @@ public sealed class CusDatabase : IDisposable
     }
 
     /// <summary>Le voci più recenti per prime.</summary>
-    public IReadOnlyList<HistoryEntry> GetHistory()
+    /// <param name="sessionId">Solo le voci di questa sessione; null: tutte.</param>
+    public IReadOnlyList<HistoryEntry> GetHistory(string? sessionId = null)
     {
         lock (_gate)
         {
             using var command = Command("""
                 SELECT item_id, session_id, seq, origin_device_id, origin_name, kind, text, image_png, files_json, created_utc
-                FROM history ORDER BY id DESC;
+                FROM history WHERE $session IS NULL OR session_id = $session ORDER BY id DESC;
                 """);
+            command.Parameters.AddWithValue("$session", (object?)sessionId ?? DBNull.Value);
+            return ReadHistory(command);
+        }
+    }
+
+    /// <summary>La voce più recente con questo item_id, o null.</summary>
+    public HistoryEntry? GetHistoryEntry(string itemId)
+    {
+        lock (_gate)
+        {
+            using var command = Command("""
+                SELECT item_id, session_id, seq, origin_device_id, origin_name, kind, text, image_png, files_json, created_utc
+                FROM history WHERE item_id = $item ORDER BY id DESC LIMIT 1;
+                """);
+            command.Parameters.AddWithValue("$item", itemId);
+            return ReadHistory(command).FirstOrDefault();
+        }
+    }
+
+    private static List<HistoryEntry> ReadHistory(SqliteCommand command)
+    {
+        {
             using var reader = command.ExecuteReader();
             var result = new List<HistoryEntry>();
             while (reader.Read())

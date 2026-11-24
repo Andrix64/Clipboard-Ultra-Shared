@@ -167,9 +167,13 @@ public sealed class SessionTests : IAsyncLifetime
             await Eventually.TrueAsync(() => host.Text == $"voce {i}", $"voce {i} arrivata");
         }
 
+        // Il membro riceve anteprime (contenuto vuoto); la voce completa arriva quando la usa.
         var seenByMember = await member.Node.GetHistoryAsync();
         Assert.Equal(20, seenByMember.Count);
-        Assert.Equal("voce 25", seenByMember[0].Content.Text);
+        Assert.True(seenByMember[0].IsPreview);
+        Assert.Equal("voce 25", seenByMember[0].Describe());
+        await member.Node.UseHistoryEntryAsync(seenByMember[^1]);
+        Assert.Equal("voce 6", member.Text);
 
         await member.Node.LeaveSessionAsync();
         await Eventually.TrueAsync(() => host.Node.Session is null, "sessione terminata");

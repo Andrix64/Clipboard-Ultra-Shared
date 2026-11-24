@@ -26,6 +26,7 @@ DefaultDirName={autopf}\CUS
 DefaultGroupName=CUS
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile=..\src\Cus.UI\Assets\cus.ico
 OutputDir={#OutputDir}
 OutputBaseFilename=cus-setup-{#AppVersion}-win-x64
 Compression=lzma2

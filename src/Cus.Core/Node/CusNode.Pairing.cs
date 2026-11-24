@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using Cus.Core.Abstractions;
 using Cus.Core.Crypto;
 using Cus.Core.Identity;
 using Cus.Core.Net;
@@ -108,7 +109,7 @@ public sealed partial class CusNode
             RememberEndpoint(connection);
             await connection.SendAsync(new PairingResultMessage(true, null, entry));
             var sync = await connection.ReceiveAsync<TrustSyncMessage>(PairingStepTimeout);
-            Trust.Merge(sync.Entries);
+            Trust.Merge(sync.Entries ?? []);
             await connection.SendAsync(new TrustSyncMessage(Trust.Entries));
             _notifier.Info($"{connection.Remote.DisplayName} è ora abbinato a questo dispositivo.");
             Log($"Abbinato: {connection.Remote.DisplayName} ({connection.Remote.Fingerprint}).");
@@ -153,7 +154,7 @@ public sealed partial class CusNode
             await connection.SendAsync(new PairingStartMessage(sid, cpace.Message), cancellationToken);
             var reply = await connection.ReceiveAsync<PairingReplyMessage>(PairingStepTimeout, cancellationToken);
             if (reply.Error is not null)
-                throw new PairingFailedException(reply.Error);
+                throw new PairingFailedException(DisplayText.Sanitize(reply.Error, 200, "Abbinamento non riuscito."));
             if (reply.Share is null || reply.Confirmation is null)
                 throw new PairingFailedException("Risposta di abbinamento incompleta.");
 
@@ -166,12 +167,19 @@ public sealed partial class CusNode
                 throw new PairingFailedException("Risposta di abbinamento non valida.");
             }
 
-            await connection.SendAsync(new PairingConfirmMessage(PairingConfirmation(isk, 'A', channelId, sid)), cancellationToken);
+            // Prima si verifica la conferma di chi mostra il codice, poi si manda la propria: se il codice
+            // è sbagliato (o l'altra parte non lo conosce) la conferma vera non esce mai da qui. Al suo
+            // posto va una conferma vuota, che l'altra parte conta come tentativo fallito.
+            var responderConfirmed = CryptographicOperations.FixedTimeEquals(reply.Confirmation, PairingConfirmation(isk, 'B', channelId, sid));
+            await connection.SendAsync(
+                new PairingConfirmMessage(responderConfirmed ? PairingConfirmation(isk, 'A', channelId, sid) : []), cancellationToken);
             var result = await connection.ReceiveAsync<PairingResultMessage>(PairingStepTimeout, cancellationToken);
+            if (!responderConfirmed)
+                throw new PairingFailedException(result is { Success: false, Error: { } error }
+                    ? DisplayText.Sanitize(error, 200, "Codice errato.")
+                    : "La conferma dell'altro dispositivo non è valida.");
             if (!result.Success)
-                throw new PairingFailedException(result.Error ?? "Abbinamento rifiutato.");
-            if (!CryptographicOperations.FixedTimeEquals(reply.Confirmation, PairingConfirmation(isk, 'B', channelId, sid)))
-                throw new PairingFailedException("La conferma dell'altro dispositivo non è valida.");
+                throw new PairingFailedException(DisplayText.Sanitize(result.Error, 200, "Abbinamento rifiutato."));
             if (result.Entry is not { Kind: TrustEntryKind.Pair } entry || entry.ActorId != remote.DeviceId || entry.SubjectId != Identity.DeviceId)
                 throw new PairingFailedException("Voce di abbinamento non valida.");
 
@@ -180,7 +188,7 @@ public sealed partial class CusNode
             RememberEndpoint(connection);
             await connection.SendAsync(new TrustSyncMessage(Trust.Entries), cancellationToken);
             var sync = await connection.ReceiveAsync<TrustSyncMessage>(PairingStepTimeout, cancellationToken);
-            Trust.Merge(sync.Entries);
+            Trust.Merge(sync.Entries ?? []);
             await connection.CloseAsync("abbinamento completato");
             Log($"Abbinato: {remote.DisplayName} ({remote.Fingerprint}).");
             return remote;

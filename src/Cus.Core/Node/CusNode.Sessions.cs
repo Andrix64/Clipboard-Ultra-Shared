@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Cus.Core.Abstractions;
+using Cus.Core.Hosting;
 using Cus.Core.Identity;
 using Cus.Core.Net;
 using Cus.Core.Storage;
@@ -21,13 +22,26 @@ public sealed partial class CusNode
     /// Invia una richiesta di accesso: questo dispositivo diventa (o resta) host della sessione.
     /// Attende la risposta dell'altro utente.
     /// </summary>
-    public async Task<InviteResult> InviteAsync(string host, int port, CancellationToken cancellationToken = default)
+    /// <param name="expectedDeviceId">
+    /// Per i peer scelti dall'elenco: l'identità annunciata. Gli annunci non sono autenticati, quindi
+    /// si verifica che il canale cifrato appartenga davvero a quel dispositivo prima di condividere.
+    /// </param>
+    public async Task<InviteResult> InviteAsync(string host, int port, string? expectedDeviceId = null, CancellationToken cancellationToken = default)
     {
         if (_memberSession is not null)
             throw new CusOperationException("Sei membro di una sessione: esci prima di invitare altri.");
 
         var connection = await ConnectAsync(host, port, cancellationToken);
         var name = connection.Remote.DisplayName;
+        if (expectedDeviceId is not null && !string.Equals(connection.Remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
+        {
+            connection.Close("identità diversa da quella annunciata");
+            throw new CusOperationException(
+                $"Il dispositivo a {new PeerEndpoint(host, port)} non è quello scelto: la sua identità ({connection.Remote.Fingerprint}) "
+                + "non corrisponde a quella annunciata in rete. Richiesta annullata.");
+        }
+
+        Log($"Collegato a {name}, impronta {connection.Remote.Fingerprint}.");
         string sessionId;
 
         await _gate.WaitAsync(cancellationToken);
@@ -131,21 +145,83 @@ public sealed partial class CusNode
         switch (message)
         {
             case ClipboardPushMessage push:
-                if (!IsAcceptableContent(push.Content, out var why))
+                var why = push.ItemId is null || push.Content is null ? "messaggio incompleto"
+                    : IsAcceptableContent(push.Content, out var reason) ? null : reason;
+                if (why is not null)
                 {
                     Log($"Copia di {connection.Remote.DisplayName} ignorata: {why}");
+                    if (push.ItemId is not null)
+                        await AcknowledgeIgnoredPushAsync(connection, push.ItemId);
                     return;
                 }
 
-                Log($"Ricevuto da {connection.Remote.DisplayName}: {Short(push.Content)}");
-                await DistributeAsync(connection.Remote.DeviceId, connection.Remote.DisplayName, push.ItemId, push.Content, connection);
+                Log($"Ricevuto da {connection.Remote.DisplayName}: {Short(push.Content!)}");
+                await DistributeAsync(connection.Remote.DeviceId, connection.Remote.DisplayName, push.ItemId!, push.Content!, connection);
                 break;
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
                 break;
             case HistoryRequestMessage request:
-                await connection.SendAsync(new HistoryReplyMessage(request.RequestId, _database.GetHistory()));
+                await connection.SendAsync(new HistoryReplyMessage(request.RequestId, SessionHistoryPreviews(connection)));
                 break;
+            case HistoryItemRequestMessage request:
+                await SendHistoryItemAsync(connection, request);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Ai membri va solo la cronologia della sessione in corso, e solo come anteprime: voci di
+    /// sessioni precedenti (magari con altre persone) non li riguardano, e le voci complete con
+    /// immagini e testi lunghi non entrerebbero in un messaggio.
+    /// </summary>
+    private IReadOnlyList<HistoryEntry> SessionHistoryPreviews(PeerConnection connection)
+    {
+        var session = _hostSession;
+        if (session is null || !session.Members.Values.Any(m => m.Connection == connection))
+            return [];
+        return _database.GetHistory(session.Id).Select(h => h.ToPreview()).ToList();
+    }
+
+    private async Task SendHistoryItemAsync(PeerConnection connection, HistoryItemRequestMessage request)
+    {
+        var session = _hostSession;
+        HistoryEntry? entry = null;
+        string? error = null;
+        if (session is null || !session.Members.Values.Any(m => m.Connection == connection))
+            error = "Richiesta non autorizzata: il dispositivo non è nella sessione.";
+        else if ((entry = _database.GetHistoryEntry(request.ItemId)) is null || entry.SessionId != session.Id)
+            error = "Voce non più presente nella cronologia della sessione.";
+
+        try
+        {
+            await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, error is null ? entry : null, error));
+        }
+        catch (MessageTooLargeException)
+        {
+            await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, null, "Voce troppo grande per essere inviata."));
+        }
+    }
+
+    /// <summary>
+    /// Una copia del membro non accettata riceve comunque la conferma (con l'ultimo numero di
+    /// sequenza già inviato): senza, il membro la crederebbe in viaggio e ignorerebbe ogni copia successiva.
+    /// </summary>
+    private async Task AcknowledgeIgnoredPushAsync(PeerConnection connection, string itemId)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var sequence = _hostSession?.Sequence ?? 0;
+            await connection.SendAsync(new ClipboardAckMessage(itemId, sequence));
+        }
+        catch (IOException)
+        {
+            // Membro caduto.
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
@@ -166,6 +242,13 @@ public sealed partial class CusNode
             if (originConnection is null && localStamp < Interlocked.Read(ref _lastRemoteWriteStamp))
                 return;
 
+            var item = new ClipboardItemMessage(itemId, session.Sequence + 1, originId, originName, content);
+            if (originConnection is null && item.Serialize().Length > SecureChannel.MaxMessageBytes)
+            {
+                _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
+                return;
+            }
+
             var sequence = ++session.Sequence;
             session.ItemOrigins[itemId] = originId;
             _database.AddHistory(new HistoryEntry(itemId, session.Id, sequence, originId, originName, content, DateTimeOffset.UtcNow));
@@ -174,7 +257,17 @@ public sealed partial class CusNode
             {
                 Interlocked.Exchange(ref _lastRemoteWriteStamp, Interlocked.Increment(ref _clipboardStamp));
                 var source = content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, originConnection, itemId) : null;
-                await _writer.WriteAsync(content, source);
+                try
+                {
+                    await _writer.WriteAsync(content, source);
+                }
+                catch (Exception ex)
+                {
+                    // La clipboard dell'host può essere occupata da un altro programma: la copia va
+                    // comunque confermata e distribuita, altrimenti il membro resterebbe bloccato.
+                    _notifier.Error($"Impossibile scrivere nella clipboard: {ex.Message}");
+                }
+
                 try
                 {
                     await originConnection.SendAsync(new ClipboardAckMessage(itemId, sequence));
@@ -185,20 +278,12 @@ public sealed partial class CusNode
                 }
             }
 
-            var item = new ClipboardItemMessage(itemId, sequence, originId, originName, content);
-            foreach (var member in session.Members.Values)
-            {
-                if (member.Direction != ShareDirection.Bidirectional || member.Connection == originConnection)
-                    continue;
-                try
-                {
-                    await member.Connection.SendAsync(item);
-                }
-                catch (IOException)
-                {
-                    // Membro caduto: lo rimuove OnMemberClosedAsync.
-                }
-            }
+            // Invii in parallelo, ognuno con il proprio timeout (PeerConnection.SendTimeout): un membro
+            // lento non ritarda gli altri e non tiene _gate oltre quel limite.
+            var targets = session.Members.Values
+                .Where(m => m.Direction == ShareDirection.Bidirectional && m.Connection != originConnection)
+                .ToList();
+            await Task.WhenAll(targets.Select(member => SendItemAsync(member.Connection, item)));
         }
         catch (Exception ex)
         {
@@ -207,6 +292,22 @@ public sealed partial class CusNode
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private async Task SendItemAsync(PeerConnection connection, ClipboardItemMessage item)
+    {
+        try
+        {
+            await connection.SendAsync(item);
+        }
+        catch (IOException)
+        {
+            // Membro caduto (o troppo lento): lo rimuove OnMemberClosedAsync.
+        }
+        catch (MessageTooLargeException)
+        {
+            Log($"Copia non inviata a {connection.Remote.DisplayName}: troppo grande.");
         }
     }
 
@@ -289,6 +390,13 @@ public sealed partial class CusNode
             decision = ConsentDecision.Accept;
             _notifier.Info($"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te.");
         }
+        else if (Interlocked.CompareExchange(ref _consentPending, 1, 0) != 0)
+        {
+            // Una sola richiesta di consenso alla volta: chiunque in rete può mandarne, e una raffica
+            // di finestre in primo piano sarebbe un disturbo (o un invito al clic sbagliato).
+            decision = ConsentDecision.Reject;
+            reason = "c'è già un'altra richiesta in attesa di risposta, riprova tra poco";
+        }
         else
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -301,6 +409,16 @@ public sealed partial class CusNode
             {
                 decision = ConsentDecision.Reject;
                 reason = "nessuna risposta";
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"CUS: richiesta di consenso fallita: {ex}");
+                decision = ConsentDecision.Reject;
+                reason = "richiesta non mostrata";
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _consentPending, 0);
             }
 
             if (decision == ConsentDecision.Reject)
@@ -356,8 +474,9 @@ public sealed partial class CusNode
                     if (_memberSession is { } session && session.Host == connection)
                     {
                         session.View = new SessionView(state.SessionId, SessionRole.Member,
-                            state.Participants.Select(p => new SessionParticipant(
-                                p.DeviceId == Identity.DeviceId ? $"{p.DisplayName} (tu)" : p.DisplayName, p.Direction, p.IsHost)).ToList());
+                            (state.Participants ?? []).Where(p => p is not null).Take(64).Select(p => new SessionParticipant(
+                                p.DeviceId == Identity.DeviceId ? $"{DisplayText.Sanitize(p.DisplayName, 64)} (tu)" : DisplayText.Sanitize(p.DisplayName, 64),
+                                p.Direction, p.IsHost)).ToList());
                         RaiseSessionChanged();
                     }
                 }
@@ -387,7 +506,7 @@ public sealed partial class CusNode
 
                 break;
             case SessionEndedMessage ended:
-                _notifier.Info($"Sessione terminata: {ended.Reason}.");
+                _notifier.Info($"Sessione terminata: {DisplayText.Sanitize(ended.Reason, 200, "chiusa dall'host")}.");
                 if (_memberSession is { } current && current.Host == connection)
                     current.EndedByHost = true;
                 connection.Close(ended.Reason);
@@ -397,6 +516,12 @@ public sealed partial class CusNode
 
     private async Task ApplyItemAsync(PeerConnection connection, ClipboardItemMessage item)
     {
+        if (item.Content is null || item.ItemId is null)
+        {
+            Log("Copia ignorata: messaggio incompleto");
+            return;
+        }
+
         if (!IsAcceptableContent(item.Content, out var why))
         {
             Log($"Copia ignorata: {why}");
@@ -427,7 +552,7 @@ public sealed partial class CusNode
             _gate.Release();
         }
 
-        Log($"Ricevuto da {item.OriginName}: {Short(item.Content)}");
+        Log($"Ricevuto da {DisplayText.Sanitize(item.OriginName, 64)}: {Short(item.Content)}");
     }
 
     private async Task OnHostClosedAsync(PeerConnection connection, string reason)
@@ -545,35 +670,53 @@ public sealed partial class CusNode
         }
         else if (_memberSession is { } member)
         {
+            // In attesa prima dell'invio: la conferma dell'host può arrivare prima che SendAsync ritorni.
+            await SetPendingPushAsync(member, itemId, pending: true);
             try
             {
-                await _gate.WaitAsync();
-                try
-                {
-                    member.PendingPushes.Add(itemId);
-                }
-                finally
-                {
-                    _gate.Release();
-                }
-
                 await member.Host.SendAsync(new ClipboardPushMessage(itemId, content));
                 Log($"Inviato all'host: {Short(content)}");
+            }
+            catch (MessageTooLargeException)
+            {
+                await SetPendingPushAsync(member, itemId, pending: false);
+                _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
             }
             catch (IOException)
             {
                 // L'host è caduto: la sessione si chiude in OnHostClosedAsync.
+                await SetPendingPushAsync(member, itemId, pending: false);
             }
         }
     }
 
+    private async Task SetPendingPushAsync(MemberSession member, string itemId, bool pending)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (pending)
+                member.PendingPushes.Add(itemId);
+            else
+                member.PendingPushes.Remove(itemId);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Cronologia: sull'host tutte le voci salvate; per un membro le anteprime della sessione in
+    /// corso (la voce completa si chiede all'host in <see cref="UseHistoryEntryAsync"/>).
+    /// </summary>
     public async Task<IReadOnlyList<HistoryEntry>> GetHistoryAsync(CancellationToken cancellationToken = default)
     {
         if (_memberSession is { } member)
         {
             var reply = await member.Host.RequestAsync<HistoryReplyMessage>(
                 id => new HistoryRequestMessage(id), TimeSpan.FromSeconds(15), cancellationToken);
-            return reply.Entries;
+            return reply.Entries ?? [];
         }
 
         return _database.GetHistory();
@@ -582,6 +725,11 @@ public sealed partial class CusNode
     /// <summary>Rimette una voce della cronologia nella propria clipboard (senza ridistribuirla).</summary>
     public async Task UseHistoryEntryAsync(HistoryEntry entry)
     {
+        if (entry.IsPreview)
+            entry = await LoadFullHistoryEntryAsync(entry);
+        if (!IsAcceptableContent(entry.Content, out var why))
+            throw new CusOperationException($"Voce della cronologia non utilizzabile: {why}.");
+
         IRemoteFileSource? source = null;
         if (entry.Content.Kind == ClipboardContentKind.Files)
         {
@@ -612,13 +760,44 @@ public sealed partial class CusNode
         await _writer.WriteAsync(entry.Content, source);
     }
 
+    private async Task<HistoryEntry> LoadFullHistoryEntryAsync(HistoryEntry preview)
+    {
+        if (_memberSession is { } member)
+        {
+            HistoryItemReplyMessage reply;
+            try
+            {
+                reply = await member.Host.RequestAsync<HistoryItemReplyMessage>(
+                    id => new HistoryItemRequestMessage(id, preview.ItemId), TimeSpan.FromSeconds(30));
+            }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException)
+            {
+                throw new CusOperationException("L'host non risponde: voce della cronologia non recuperata.", ex);
+            }
+
+            if (reply.Error is not null || reply.Entry is null)
+                throw new CusOperationException(DisplayText.Sanitize(reply.Error, 200, "Voce della cronologia non disponibile."));
+            if (reply.Entry.ItemId != preview.ItemId || reply.Entry.IsPreview || reply.Entry.Content is null)
+                throw new CusOperationException("Risposta dell'host non valida.");
+            return reply.Entry;
+        }
+
+        return _database.GetHistoryEntry(preview.ItemId)
+            ?? throw new CusOperationException("Voce non più presente nella cronologia.");
+    }
+
     // ================================================================ file lazy
 
     private async Task ServeFileReadAsync(PeerConnection connection, FileReadRequestMessage request)
     {
         FileReadReplyMessage reply;
+        var acquired = false;
         try
         {
+            // Ogni lettura tiene in memoria fino a 1 MB: un numero limitato alla volta.
+            acquired = await _fileReadSlots.WaitAsync(FileReadTimeout, _lifetime.Token);
+            if (!acquired)
+                throw new RemoteFileUnavailableException("Il PC d'origine è occupato a servire altre letture: riprova.");
             var data = await ReadFileForPeerAsync(connection, request);
             reply = new FileReadReplyMessage(request.RequestId, data, null);
         }
@@ -629,6 +808,11 @@ public sealed partial class CusNode
         catch (Exception ex)
         {
             reply = new FileReadReplyMessage(request.RequestId, null, $"Lettura del file non riuscita sul PC d'origine: {ex.Message}");
+        }
+        finally
+        {
+            if (acquired)
+                _fileReadSlots.Release();
         }
 
         try
@@ -712,8 +896,9 @@ public sealed partial class CusNode
             ClipboardContentKind.Image when content.ImagePng.Length > MaxImageBytes => $"immagine troppo grande (oltre {MaxImageBytes / 1024 / 1024} MB)",
             ClipboardContentKind.Text when content.Text is null => "testo vuoto",
             ClipboardContentKind.Text when content.Text.Length > MaxTextChars => "testo troppo lungo",
-            ClipboardContentKind.Files when content.Files is not { Count: > 0 } => "nessun file",
-            _ => "",
+            ClipboardContentKind.Files when !ClipboardFileNames.TryValidate(content.Files, out var fileReason) => fileReason,
+            ClipboardContentKind.Text or ClipboardContentKind.Image or ClipboardContentKind.Files => "",
+            _ => "tipo di contenuto sconosciuto",
         };
         return reason.Length == 0;
     }
@@ -795,8 +980,12 @@ public sealed partial class CusNode
                 }
 
                 if (reply.Error is not null)
-                    throw new RemoteFileUnavailableException(reply.Error);
-                return reply.Data ?? [];
+                    throw new RemoteFileUnavailableException(DisplayText.Sanitize(reply.Error, 300, "errore sul PC d'origine"));
+
+                // Mai più byte di quelli chiesti, anche se l'altro PC ne manda di più.
+                var data = reply.Data ?? [];
+                var requested = Math.Min(count, MaxFileReadBytes);
+                return data.Length <= requested ? data : data[..requested];
             }
             catch (RemoteFileUnavailableException ex) when (notify)
             {

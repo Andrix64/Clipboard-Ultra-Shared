@@ -25,6 +25,12 @@ public sealed partial class CusNode : IAsyncDisposable
     private static readonly TimeSpan SyncInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(15);
 
+    /// <summary>Connessioni in ingresso non ancora concluse (handshake, primo messaggio, consenso).</summary>
+    private const int MaxPendingIncoming = 16;
+
+    /// <summary>Annunci di scoperta ricordati: oltre, i nuovi si ignorano finché i vecchi non scadono.</summary>
+    private const int MaxDiscovered = 256;
+
     private readonly CusNodeOptions _options;
     private readonly CusDatabase _database;
     private readonly IClipboardMonitor _monitor;
@@ -38,6 +44,8 @@ public sealed partial class CusNode : IAsyncDisposable
     private readonly ConcurrentDictionary<string, (DiscoveryAnnouncement Announcement, DateTimeOffset Seen)> _discovered = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSync = new();
     private readonly Lock _offerGate = new();
+    private readonly SemaphoreSlim _incomingSlots = new(MaxPendingIncoming, MaxPendingIncoming);
+    private readonly SemaphoreSlim _fileReadSlots = new(8, 8);
 
     /// <summary>Le copie locali si elaborano una alla volta, nell'ordine in cui sono avvenute.</summary>
     private readonly Channel<ClipboardChangedEventArgs> _localChanges = Channel.CreateUnbounded<ClipboardChangedEventArgs>(
@@ -53,6 +61,7 @@ public sealed partial class CusNode : IAsyncDisposable
     private int _syncScheduled;
     private long _clipboardStamp;
     private long _lastRemoteWriteStamp;
+    private int _consentPending;
 
     public CusNode(
         CusNodeOptions options,
@@ -112,6 +121,8 @@ public sealed partial class CusNode : IAsyncDisposable
         {
             var now = DateTimeOffset.UtcNow;
             var trust = Trust.State;
+            // Gli annunci non sono autenticati: "IsTrusted" dice solo che l'annuncio usa l'ID di un
+            // dispositivo abbinato. L'identità vera si verifica alla connessione (InviteAsync con l'ID atteso).
             var result = _discovered.Values
                 .Where(d => now - d.Seen < PeerExpiry && d.Announcement.DeviceId != Identity.DeviceId && !trust.IsRevoked(d.Announcement.DeviceId))
                 .Select(d => new PeerView(d.Announcement.DeviceId, d.Announcement.DisplayName, d.Announcement.UserName,
@@ -279,7 +290,25 @@ public sealed partial class CusNode : IAsyncDisposable
                 continue;
             }
 
-            _ = Task.Run(() => HandleIncomingAsync(client));
+            // Chiunque in rete può collegarsi: oltre un certo numero di connessioni ancora in fase
+            // iniziale le nuove si rifiutano subito, invece di accumulare memoria e task.
+            if (!_incomingSlots.Wait(0))
+            {
+                client.Dispose();
+                continue;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await HandleIncomingAsync(client);
+                }
+                finally
+                {
+                    _incomingSlots.Release();
+                }
+            });
         }
     }
 
@@ -297,7 +326,7 @@ public sealed partial class CusNode : IAsyncDisposable
         var sync = await connection.ReceiveAsync<TrustSyncMessage>(PeerConnection.HandshakeTimeout);
         if (inGroup)
         {
-            Trust.Merge(sync.Entries);
+            Trust.Merge(sync.Entries ?? []);
             _lastSync[remoteId] = DateTimeOffset.UtcNow;
         }
 
@@ -377,8 +406,24 @@ public sealed partial class CusNode : IAsyncDisposable
 
     private void OnAnnounced(DiscoveryAnnouncement announcement)
     {
-        var isNew = !_discovered.ContainsKey(announcement.DeviceId);
-        _discovered[announcement.DeviceId] = (announcement, DateTimeOffset.UtcNow);
+        // Chiave = ID + indirizzo: un annuncio falso con l'ID di un dispositivo abbinato non sostituisce
+        // quello vero, compare accanto (e l'invito a quell'indirizzo fallisce la verifica d'identità).
+        var key = $"{announcement.DeviceId}|{announcement.Host}|{announcement.Port}";
+        var now = DateTimeOffset.UtcNow;
+        var isNew = !_discovered.ContainsKey(key);
+        if (isNew && _discovered.Count >= MaxDiscovered)
+        {
+            foreach (var (oldKey, old) in _discovered)
+            {
+                if (now - old.Seen >= PeerExpiry)
+                    _discovered.TryRemove(oldKey, out _);
+            }
+
+            if (_discovered.Count >= MaxDiscovered)
+                return;
+        }
+
+        _discovered[key] = (announcement, now);
         if (isNew)
             PeersChanged?.Invoke(this, EventArgs.Empty);
 
@@ -515,7 +560,7 @@ public sealed partial class CusNode : IAsyncDisposable
         if (message is TrustSyncMessage sync)
         {
             if (Trust.State.IsGroupMember(connection.Remote.DeviceId))
-                Trust.Merge(sync.Entries);
+                Trust.Merge(sync.Entries ?? []);
             return true;
         }
 

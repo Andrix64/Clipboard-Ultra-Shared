@@ -48,6 +48,42 @@ public class SecureChannelTests
     }
 
     [Fact]
+    public async Task OversizedMessage_IsRefusedBeforeEncrypting_AndTheChannelKeepsWorking()
+    {
+        var (a, b) = (DeviceIdentity.Generate("a", "u"), DeviceIdentity.Generate("b", "u"));
+        var (s1, s2, _) = await RecordingLoopbackAsync();
+        var (aChannel, bChannel) = await EstablishAsync(s1, a, s2, b);
+
+        await Assert.ThrowsAsync<MessageTooLargeException>(
+            () => aChannel.SendAsync(new byte[SecureChannel.MaxMessageBytes + 1], default));
+
+        // Prima della correzione lo stato di cifratura avanzava comunque: il messaggio successivo
+        // risultava "alterato o fuori ordine".
+        await aChannel.SendAsync(new byte[] { 7, 8, 9 }, default);
+        Assert.Equal(new byte[] { 7, 8, 9 }, await bChannel.ReceiveAsync(default));
+        await aChannel.SendAsync(new byte[SecureChannel.MaxMessageBytes], default);
+        Assert.Equal(SecureChannel.MaxMessageBytes, (await bChannel.ReceiveAsync(default)).Length);
+    }
+
+    [Fact]
+    public async Task Handshake_RejectsOversizedFrame_WithoutAllocatingIt()
+    {
+        var identity = DeviceIdentity.Generate("a", "u");
+        var toUs = new Pipe();
+        var fromUs = new Pipe();
+        var stream = new DuplexStream(toUs.Reader.AsStream(), fromUs.Writer.AsStream());
+
+        // Chi si collega dichiara un frame da 8 MB e poi non manda nulla.
+        var header = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, SecureChannel.MaxFrameBytes);
+        await toUs.Writer.WriteAsync(header);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await Assert.ThrowsAsync<ProtocolException>(
+            () => SecureChannel.EstablishAsync(stream, identity, isInitiator: false, timeout.Token));
+    }
+
+    [Fact]
     public async Task ImpersonatingAKey_WithoutThePrivateKey_Fails()
     {
         var honest = DeviceIdentity.Generate("onesto", "u");

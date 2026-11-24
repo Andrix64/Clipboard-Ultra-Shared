@@ -1,3 +1,4 @@
+using Cus.Core.Abstractions;
 using Cus.Core.Identity;
 using Cus.Core.Storage;
 
@@ -42,14 +43,16 @@ public sealed class TrustLog
     private readonly CusDatabase _database;
     private readonly DeviceIdentity _self;
     private readonly Lock _gate = new();
-    private List<TrustEntry> _entries;
+    private readonly List<TrustEntry> _entries;
+    private readonly HashSet<string> _known;
 
     public TrustLog(CusDatabase database, DeviceIdentity self)
     {
         _database = database;
         _self = self;
         _entries = database.GetTrustEntries().Where(e => e.HasValidSignature()).ToList();
-        State = Compute(self.SignPublicKey, _entries);
+        _known = _entries.Select(e => e.EntryId).ToHashSet();
+        State = ComputeVerified(self.SignPublicKey, _entries);
     }
 
     public event EventHandler? Changed;
@@ -70,7 +73,7 @@ public sealed class TrustLog
                 .Where(e => e.Kind == TrustEntryKind.Pair && e.ActorId == deviceId && e.SubjectId != _self.DeviceId)
                 .GroupBy(e => e.SubjectId)
                 .Select(g => g.OrderBy(e => e.CreatedUtc).Last())
-                .Select(e => new TrustedDevice(e.SubjectId, e.SubjectName, e.SubjectPublicKey))
+                .Select(e => new TrustedDevice(e.SubjectId, DisplayText.Sanitize(e.SubjectName, 64), e.SubjectPublicKey))
                 .ToList();
         }
     }
@@ -86,22 +89,22 @@ public sealed class TrustLog
         var added = false;
         lock (_gate)
         {
-            var known = _entries.Select(e => e.EntryId).ToHashSet();
             foreach (var entry in incoming)
             {
                 if (_entries.Count >= MaxEntries)
                     break;
-                if (entry.ActorPublicKey.Length != 32 || entry.SubjectPublicKey.Length != 32 || !entry.HasValidSignature())
+                if (entry is not { ActorPublicKey.Length: 32, SubjectPublicKey.Length: 32, SubjectName: not null, Signature: not null })
                     continue;
-                if (!known.Add(entry.EntryId))
+                if (_known.Contains(entry.EntryId) || !entry.HasValidSignature())
                     continue;
+                _known.Add(entry.EntryId);
                 _database.AddTrustEntry(entry);
                 _entries.Add(entry);
                 added = true;
             }
 
             if (added)
-                State = Compute(_self.SignPublicKey, _entries);
+                State = ComputeVerified(_self.SignPublicKey, _entries);
         }
 
         if (added)
@@ -109,10 +112,13 @@ public sealed class TrustLog
         return added;
     }
 
-    public static TrustState Compute(byte[] selfPublicKey, IReadOnlyCollection<TrustEntry> entries)
+    public static TrustState Compute(byte[] selfPublicKey, IReadOnlyCollection<TrustEntry> entries) =>
+        ComputeVerified(selfPublicKey, entries.Where(e => e.HasValidSignature()).ToList());
+
+    /// <summary>Come <see cref="Compute"/>, per voci la cui firma è già stata verificata (all'ingresso nella lista).</summary>
+    private static TrustState ComputeVerified(byte[] selfPublicKey, IReadOnlyList<TrustEntry> valid)
     {
         var selfId = DeviceIdentity.ComputeDeviceId(selfPublicKey);
-        var valid = entries.Where(e => e.HasValidSignature()).ToList();
         var pairs = valid.Where(e => e.Kind == TrustEntryKind.Pair).ToList();
 
         var reachable = Closure(selfId, pairs, excludedActors: []);
@@ -132,25 +138,34 @@ public sealed class TrustLog
             .Where(e => trustedIds.Contains(e.SubjectId))
             .GroupBy(e => e.SubjectId)
             .Select(g => g.OrderBy(e => e.CreatedUtc).Last())
-            .ToDictionary(e => e.SubjectId, e => new TrustedDevice(e.SubjectId, e.SubjectName, e.SubjectPublicKey));
+            .ToDictionary(e => e.SubjectId, e => new TrustedDevice(e.SubjectId, DisplayText.Sanitize(e.SubjectName, 64), e.SubjectPublicKey));
 
         return new TrustState(trusted, revoked, SelfRevoked: false, reachable);
     }
 
+    /// <summary>Visita in ampiezza del grafo attore → soggetto: lineare nel numero di voci.</summary>
     private static HashSet<string> Closure(string selfId, List<TrustEntry> pairs, HashSet<string> excludedActors)
     {
-        var result = new HashSet<string> { selfId };
-        bool grew;
-        do
+        var edges = new Dictionary<string, List<string>>();
+        foreach (var pair in pairs)
         {
-            grew = false;
-            foreach (var pair in pairs)
+            if (!edges.TryGetValue(pair.ActorId, out var subjects))
+                edges[pair.ActorId] = subjects = [];
+            subjects.Add(pair.SubjectId);
+        }
+
+        var result = new HashSet<string> { selfId };
+        var queue = new Queue<string>([selfId]);
+        while (queue.TryDequeue(out var actor))
+        {
+            if (excludedActors.Contains(actor) || !edges.TryGetValue(actor, out var subjects))
+                continue;
+            foreach (var subject in subjects)
             {
-                if (result.Contains(pair.ActorId) && !excludedActors.Contains(pair.ActorId) && result.Add(pair.SubjectId))
-                    grew = true;
+                if (result.Add(subject))
+                    queue.Enqueue(subject);
             }
         }
-        while (grew);
 
         return result;
     }

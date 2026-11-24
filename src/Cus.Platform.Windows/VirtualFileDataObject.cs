@@ -31,8 +31,17 @@ internal sealed class VirtualFileDataObject : ComIDataObject
     private readonly IRemoteFileSource _source;
     private readonly ClipboardFormats _formats;
 
+    /// <exception cref="ArgumentException">
+    /// Elenco non valido (vedi <see cref="ClipboardFileNames.TryValidate"/>): nomi con '\', unità,
+    /// percorsi UNC, flussi alternativi, nomi di dispositivo o '..' scriverebbero fuori dalla
+    /// cartella in cui l'utente incolla. Si rifiuta tutto l'elenco, mai un nome corretto in silenzio.
+    /// </exception>
     public VirtualFileDataObject(IReadOnlyList<ClipboardFileInfo> files, IRemoteFileSource source, ClipboardFormats formats)
     {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(formats);
+        if (!ClipboardFileNames.TryValidate(files, out var reason))
+            throw new ArgumentException($"Elenco di file ricevuto non valido: {reason}.", nameof(files));
         _source = source;
         _formats = formats;
         _entries = BuildEntries(files);
@@ -73,6 +82,13 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         if (cf == _formats.OwnWriteMarker && (format.tymed & TYMED.TYMED_HGLOBAL) != 0)
         {
             medium = HGlobal([1]);
+            return;
+        }
+
+        // DWORD 0: i file ricevuti non finiscono nella cronologia Win+V né nella clipboard cloud.
+        if ((cf == _formats.CanIncludeInHistory || cf == _formats.CanUploadToCloud) && (format.tymed & TYMED.TYMED_HGLOBAL) != 0)
+        {
+            medium = HGlobal(BitConverter.GetBytes(0u));
             return;
         }
 
@@ -144,8 +160,11 @@ internal sealed class VirtualFileDataObject : ComIDataObject
             BitConverter.TryWriteBytes(buffer.AsSpan(offset + 36, 4), isFile ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_DIRECTORY);
             BitConverter.TryWriteBytes(buffer.AsSpan(offset + 64, 4), (uint)(entry.Size >> 32));
             BitConverter.TryWriteBytes(buffer.AsSpan(offset + 68, 4), (uint)(entry.Size & 0xFFFFFFFF));
-            var name = entry.Name.Length > 259 ? entry.Name[..259] : entry.Name;
-            Encoding.Unicode.GetBytes(name, buffer.AsSpan(offset + 72, 520));
+            // cFileName è WCHAR[260] con il terminatore: i nomi sono già validati entro 259 caratteri.
+            // Un nome più lungo è un errore e non si tronca (cambierebbe il file creato).
+            if (entry.Name.Length > ClipboardFileNames.MaxPathLength)
+                throw new InvalidOperationException($"Nome troppo lungo per il descrittore: {entry.Name.Length} caratteri.");
+            Encoding.Unicode.GetBytes(entry.Name, buffer.AsSpan(offset + 72, 520));
         }
 
         return buffer;
@@ -157,26 +176,24 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < files.Count; i++)
         {
-            var parts = files[i].Name.Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => p is not ("." or ".."))
-                .ToArray();
-            if (parts.Length == 0)
-                continue;
-            for (var depth = 1; depth < parts.Length; depth++)
+            // Nomi già validati: segmenti non vuoti separati da '/', senza '\'. Le cartelle
+            // intermedie sono i prefissi fino a ogni separatore, in ordine di profondità.
+            var path = files[i].Name.Replace('/', '\\');
+            for (var separator = path.IndexOf('\\'); separator >= 0; separator = path.IndexOf('\\', separator + 1))
             {
-                var directory = string.Join('\\', parts[..depth]);
+                var directory = path[..separator];
                 if (directories.Add(directory))
                     entries.Add(new Entry(directory, 0, -1));
             }
 
-            entries.Add(new Entry(string.Join('\\', parts), files[i].SizeBytes, i));
+            entries.Add(new Entry(path, files[i].SizeBytes, i));
         }
 
         return entries;
     }
 
     private ushort[] SupportedHGlobalFormats() =>
-        [_formats.FileGroupDescriptor, _formats.PreferredDropEffect, _formats.OwnWriteMarker];
+        [_formats.FileGroupDescriptor, _formats.PreferredDropEffect, _formats.OwnWriteMarker, _formats.CanIncludeInHistory, _formats.CanUploadToCloud];
 
     private static STGMEDIUM HGlobal(ReadOnlySpan<byte> data) => new()
     {
@@ -243,7 +260,10 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
         {
             if (_position < _bufferStart || _position >= _bufferStart + _buffer.Length)
                 Fill();
-            var available = (int)Math.Min(cb - total, _bufferStart + _buffer.Length - _position);
+            // Mai oltre la dimensione dichiarata, anche se il PC d'origine mandasse più byte.
+            var available = (int)Math.Min(Math.Min(cb - total, _bufferStart + _buffer.Length - _position), size - _position);
+            if (available <= 0)
+                break;
             Array.Copy(_buffer, _position - _bufferStart, pv, total, available);
             total += available;
             _position += available;
@@ -309,7 +329,8 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
             var data = Task.Run(() => source.ReadAsync(fileIndex, _position, count)).GetAwaiter().GetResult();
             if (data.Length == 0)
                 throw new RemoteFileUnavailableException("Il PC d'origine ha restituito un blocco vuoto.");
-            _buffer = data;
+            // Un blocco più lungo del richiesto si tronca: i byte in più non appartengono al file.
+            _buffer = data.Length > count ? data[..count] : data;
             _bufferStart = _position;
         }
         catch (Exception ex)

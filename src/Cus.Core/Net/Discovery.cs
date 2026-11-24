@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using Cus.Core.Abstractions;
 
 namespace Cus.Core.Net;
 
@@ -99,6 +100,9 @@ public sealed class Discovery : IAsyncDisposable
 
     private static bool IsLocalAddress(IPAddress address) => LocalAddresses.Contains(address);
 
+    /// <summary>Un ID dispositivo è di 32 cifre esadecimali (vedi DeviceIdentity.ComputeDeviceId).</summary>
+    private static bool IsDeviceId(string? value) => value is { Length: 32 } && value.All(char.IsAsciiHexDigit);
+
     private async Task ReceiveLoopAsync()
     {
         while (!_lifetime.IsCancellationRequested && _client is not null)
@@ -110,11 +114,12 @@ public sealed class Discovery : IAsyncDisposable
                     continue;
                 var payload = JsonSerializer.Deserialize<AnnouncementPayload>(result.Buffer);
                 if (payload is null || payload.App != "CUS" || payload.Instance == _instanceId
-                    || payload.Port is < 1 or > 65535 || string.IsNullOrEmpty(payload.DeviceId))
+                    || payload.Port is < 1 or > 65535 || !IsDeviceId(payload.DeviceId))
                     continue;
                 // Un'istanza sullo stesso PC si raggiunge sempre in loopback (anche se ascolta solo lì).
                 var host = IsLocalAddress(result.RemoteEndPoint.Address) ? "127.0.0.1" : result.RemoteEndPoint.Address.ToString();
-                Announced?.Invoke(new DiscoveryAnnouncement(payload.DeviceId, payload.DisplayName, payload.UserName, host, payload.Port));
+                Announced?.Invoke(new DiscoveryAnnouncement(
+                    payload.DeviceId.ToUpperInvariant(), DisplayText.Sanitize(payload.DisplayName, 64), DisplayText.Sanitize(payload.UserName, 64, ""), host, payload.Port));
             }
             catch (OperationCanceledException)
             {

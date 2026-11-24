@@ -33,7 +33,7 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 - **Conflitti:** **vince sempre l'ultima copia arrivata all'host.** L'ordine lo decide solo l'host, non gli orologi dei PC.
 - **Sola lettura:** la decide **chi concede** l'accesso ("puoi solo leggere"). Quel membro invia le proprie copie alla sessione, ma non riceve quelle degli altri.
 - **Indicatore:** mostra chi è nella sessione e la direzione attiva per ciascuno (bidirezionale o sola lettura).
-- **Cronologia:** sta solo sull'host. I membri la consultano durante la sessione, chiedendola all'host. A fine sessione le voci restano nel DB dell'host.
+- **Cronologia:** sta solo sull'host. I membri la consultano durante la sessione, chiedendola all'host, e vedono solo le voci della sessione in corso. A fine sessione le voci restano nel DB dell'host.
 - **Uscita dell'host:** se l'host si disconnette, la sessione termina per tutti. Non c'è passaggio di ruolo.
 
 ## Flusso

@@ -17,10 +17,11 @@ internal sealed unsafe class MessageWindowThread : IDisposable
     private static readonly ConcurrentDictionary<nint, MessageWindowThread> Windows = new();
     private static readonly Lazy<bool> ClassRegistered = new(RegisterClass);
 
-    private readonly ConcurrentQueue<Action> _queue = new();
+    private readonly ConcurrentQueue<WorkItem> _queue = new();
     private readonly Thread _thread;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
+    private volatile bool _exited;
 
     public MessageWindowThread()
     {
@@ -36,8 +37,14 @@ internal sealed unsafe class MessageWindowThread : IDisposable
     /// <summary>Messaggi ricevuti dalla finestra (sul thread della finestra).</summary>
     public event Action<uint>? MessageReceived;
 
+    /// <summary>
+    /// Esegue <paramref name="action"/> sul thread della finestra. Dopo <see cref="Dispose"/> (o se
+    /// il ciclo dei messaggi è terminato) il task fallisce subito con <see cref="ObjectDisposedException"/>:
+    /// non resta mai in attesa per sempre.
+    /// </summary>
     public Task<T> InvokeAsync<T>(Func<T> action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (Environment.CurrentManagedThreadId == _thread.ManagedThreadId)
         {
@@ -46,13 +53,21 @@ internal sealed unsafe class MessageWindowThread : IDisposable
             return tcs.Task;
         }
 
-        _queue.Enqueue(() =>
-        {
-            try { tcs.SetResult(action()); }
-            catch (Exception ex) { tcs.SetException(ex); }
-        });
-        if (!Native.PostMessageW(Handle, WM_INVOKE, 0, 0))
-            tcs.TrySetException(new ObjectDisposedException(nameof(MessageWindowThread)));
+        if (Volatile.Read(ref _disposed) != 0 || _exited)
+            return Task.FromException<T>(new ObjectDisposedException(nameof(MessageWindowThread)));
+
+        _queue.Enqueue(new WorkItem(
+            () =>
+            {
+                try { tcs.TrySetResult(action()); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            },
+            ex => tcs.TrySetException(ex)));
+
+        // Il ciclo può essere terminato tra il controllo e l'accodamento, oppure la finestra può
+        // essere già distrutta (PostMessage fallisce): il lavoro in coda non verrebbe mai eseguito.
+        if (_exited || !Native.PostMessageW(Handle, WM_INVOKE, 0, 0))
+            FailPending();
         return tcs.Task;
     }
 
@@ -68,6 +83,12 @@ internal sealed unsafe class MessageWindowThread : IDisposable
             return;
         Native.PostMessageW(Handle, Native.WM_CLOSE, 0, 0);
         _thread.Join(TimeSpan.FromSeconds(5));
+    }
+
+    private void FailPending()
+    {
+        while (_queue.TryDequeue(out var item))
+            item.Fail(new ObjectDisposedException(nameof(MessageWindowThread)));
     }
 
     private void Run()
@@ -94,6 +115,9 @@ internal sealed unsafe class MessageWindowThread : IDisposable
         }
         finally
         {
+            // Il lavoro accodato dopo WM_CLOSE (o mai arrivato alla finestra) fallisce invece di restare appeso.
+            _exited = true;
+            FailPending();
             Native.OleUninitialize();
         }
     }
@@ -103,8 +127,8 @@ internal sealed unsafe class MessageWindowThread : IDisposable
         switch (msg)
         {
             case WM_INVOKE:
-                while (_queue.TryDequeue(out var action))
-                    action();
+                while (_queue.TryDequeue(out var item))
+                    item.Run();
                 return 0;
             case Native.WM_CLOSE:
                 Native.DestroyWindow(hwnd);
@@ -153,4 +177,6 @@ internal sealed unsafe class MessageWindowThread : IDisposable
 
         return true;
     }
+
+    private readonly record struct WorkItem(Action Run, Action<Exception> Fail);
 }

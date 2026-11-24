@@ -6,7 +6,8 @@
         WindowDecorations="None"
         Background="Transparent"
         TransparencyLevelHint="Transparent"
-        Title="CUS">
+        Title="CUS"
+        Icon="avares://Cus.UI/Assets/cus.ico">
   <Grid Margin="14">
 
     <!-- Pannello laterale, infilato dietro al corpo principale -->

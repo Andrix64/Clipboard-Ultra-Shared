@@ -2,6 +2,15 @@
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="Cus.App.Windows" />
 
+  <!-- CUS non chiede mai privilegi di amministratore: gira con quelli dell'utente che lo avvia. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
   <!-- Per-monitor DPI v2: l'indicatore va posizionato correttamente su monitor con DPI diversi. -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>

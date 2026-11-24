@@ -20,7 +20,12 @@ public partial class MainWindow : Window
     private readonly List<TrustedDevice> _devices = [];
     private readonly List<(Button Button, Control Page)> _pages = [];
     private IDisposable? _codeTimer;
-    private bool _shutdownDone;
+
+    /// <summary>Arresto del nodo avviato (un secondo clic su chiudi non lo ripete).</summary>
+    private bool _shutdownStarted;
+
+    /// <summary>Arresto concluso: la prossima chiusura è quella vera.</summary>
+    private bool _closeAllowed;
 
     /// <summary>Usato solo dal designer di Avalonia.</summary>
     public MainWindow()
@@ -86,19 +91,51 @@ public partial class MainWindow : Window
     protected override async void OnClosing(WindowClosingEventArgs e)
     {
         base.OnClosing(e);
-        if (_shutdownDone || _model.Shutdown is not { } shutdown)
+        if (e.Cancel || _closeAllowed || _model.Shutdown is not { } shutdown)
             return;
 
-        // Si ferma il nodo (uscita dalla sessione inclusa) prima di chiudere davvero.
+        if (e.CloseReason == WindowCloseReason.OSShutdown)
+        {
+            // Disconnessione o spegnimento di Windows: non si trattiene il sistema. Si tenta un
+            // arresto ordinato per al massimo due secondi, fuori dal thread della UI.
+            _shutdownStarted = true;
+            try
+            {
+                Task.Run(shutdown).Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"CUS: arresto durante lo spegnimento di Windows fallito: {ex}");
+            }
+
+            return;
+        }
+
+        // Si ferma il nodo (uscita dalla sessione inclusa) prima di chiudere davvero. Se l'arresto
+        // è già in corso (secondo clic su chiudi) si aspetta che finisca: la finestra si chiuderà da sola.
         e.Cancel = true;
-        _shutdownDone = true;
+        if (_shutdownStarted)
+            return;
+        _shutdownStarted = true;
+        LcdState.Text = "CHIUSURA...";
         try
         {
             await shutdown();
         }
-        finally
+        catch (Exception ex)
+        {
+            // async void: un'eccezione qui chiuderebbe il processo senza spiegazioni.
+            System.Diagnostics.Trace.WriteLine($"CUS: arresto non riuscito: {ex}");
+        }
+
+        _closeAllowed = true;
+        try
         {
             Close();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"CUS: chiusura della finestra non riuscita: {ex}");
         }
     }
 
@@ -152,7 +189,9 @@ public partial class MainWindow : Window
         {
             if (PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
             {
-                await Invite(node, _peers[i].Host, _peers[i].Port);
+                // Peer scoperto: l'identità che risponde deve essere quella annunciata (null per i
+                // peer aggiunti a mano, che non hanno un'identità nota).
+                await Invite(node, _peers[i].Host, _peers[i].Port, _peers[i].DeviceId);
             }
             else
             {
@@ -163,7 +202,7 @@ public partial class MainWindow : Window
         InviteAddressButton.Click += async (_, _) =>
         {
             if (ParseAddress(AddressInput.Text) is { } endpoint)
-                await Invite(node, endpoint.Host, endpoint.Port);
+                await Invite(node, endpoint.Host, endpoint.Port, expectedDeviceId: null);
         };
         AddPeerButton.Click += (_, _) =>
         {
@@ -185,12 +224,12 @@ public partial class MainWindow : Window
         };
     }
 
-    private async Task Invite(CusNode node, string host, int port)
+    private async Task Invite(CusNode node, string host, int port, string? expectedDeviceId)
     {
         AddActivity($"Richiesta inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
         await Run(async () =>
         {
-            var result = await node.InviteAsync(host, port);
+            var result = await node.InviteAsync(host, port, expectedDeviceId);
             if (result.Outcome == InviteOutcome.Rejected)
                 AddActivity($"{result.PeerName} ha rifiutato" + (result.Reason is null ? "." : $": {result.Reason}."));
         });
@@ -243,12 +282,15 @@ public partial class MainWindow : Window
         RefreshHistoryButton.Click += async (_, _) => await RefreshHistoryAsync();
         UseHistoryButton.Click += async (_, _) =>
         {
-            if (HistoryList.SelectedIndex is var i && i >= 0 && i < _history.Count)
-                await Run(async () =>
-                {
-                    await node.UseHistoryEntryAsync(_history[i]);
-                    AddActivity($"Copiato dalla cronologia: {Shorten(_history[i].Content.Describe())}");
-                });
+            if (HistoryList.SelectedIndex is not (var i and >= 0) || i >= _history.Count)
+                return;
+            // La voce si fissa prima dell'attesa: nel frattempo la lista può essere ricaricata.
+            var entry = _history[i];
+            await Run(async () =>
+            {
+                await node.UseHistoryEntryAsync(entry);
+                AddActivity($"Copiato dalla cronologia: {Shorten(entry.Describe())}");
+            });
         };
     }
 
@@ -262,7 +304,7 @@ public partial class MainWindow : Window
             _history.Clear();
             _history.AddRange(entries);
             HistoryList.ItemsSource = _history.Select(h =>
-                $"#{h.Sequence,-3} {h.CreatedUtc.ToLocalTime():HH:mm:ss} {h.OriginName}: {Shorten(h.Content.Describe())}").ToList();
+                $"#{h.Sequence,-3} {h.CreatedUtc.ToLocalTime():HH:mm:ss} {h.OriginName}: {Shorten(h.Describe())}").ToList();
         });
     }
 
@@ -307,11 +349,48 @@ public partial class MainWindow : Window
         };
         RevokeButton.Click += async (_, _) =>
         {
-            if (DevicesList.SelectedIndex is var i && i >= 0 && i < _devices.Count)
-                await Run(() => node.RevokeAsync(_devices[i].DeviceId));
+            if (DevicesList.SelectedIndex is not (var i and >= 0) || i >= _devices.Count)
+                return;
+            var device = _devices[i];
+            await Run(async () =>
+            {
+                if (await ConfirmDialog.ShowAsync(this, "Revoca dispositivo",
+                        $"Revocare {device.DisplayName}? Non potrà più condividere la clipboard con i tuoi PC "
+                        + "e la revoca non si può annullare: per riaverlo servirà un nuovo abbinamento con una nuova identità.",
+                        "REVOCA"))
+                    await node.RevokeAsync(device.DeviceId);
+            });
         };
-        RevokeSelfButton.Click += async (_, _) => await Run(() => node.RevokeAsync(node.Identity.DeviceId));
-        ResetIdentityButton.Click += (_, _) => _model.ResetIdentityAndRestart?.Invoke();
+        RevokeSelfButton.Click += async (_, _) => await Run(async () =>
+        {
+            if (await ConfirmDialog.ShowAsync(this, "Revoca questo PC",
+                    "Revocare questo PC? Gli altri tuoi PC smetteranno di fidarsi di lui e la revoca non si può annullare: "
+                    + "per tornare a usare CUS qui servirà una nuova identità.",
+                    "REVOCA QUESTO PC"))
+                await node.RevokeAsync(node.Identity.DeviceId);
+        });
+        ResetIdentityButton.Click += async (_, _) =>
+        {
+            if (_model.ResetIdentityAndRestart is not { } reset)
+                return;
+            await Run(async () =>
+            {
+                if (!await ConfirmDialog.ShowAsync(this, "Nuova identità",
+                        "Generare una nuova identità e riavviare CUS? L'identità attuale viene cancellata e non si può recuperare: "
+                        + "questo PC andrà abbinato di nuovo agli altri.",
+                        "NUOVA IDENTITÀ"))
+                    return;
+                ResetIdentityButton.IsEnabled = false;
+                try
+                {
+                    await reset();
+                }
+                finally
+                {
+                    ResetIdentityButton.IsEnabled = true;
+                }
+            });
+        };
         DevicesList.SelectionChanged += (_, _) =>
         {
             if (DevicesList.SelectedIndex is var i && i >= 0 && i < _devices.Count)

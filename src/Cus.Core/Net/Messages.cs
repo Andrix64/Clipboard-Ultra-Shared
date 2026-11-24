@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cus.Core.Abstractions;
@@ -22,6 +23,8 @@ namespace Cus.Core.Net;
 [JsonDerivedType(typeof(SessionEndedMessage), "session-ended")]
 [JsonDerivedType(typeof(HistoryRequestMessage), "history-request")]
 [JsonDerivedType(typeof(HistoryReplyMessage), "history-reply")]
+[JsonDerivedType(typeof(HistoryItemRequestMessage), "history-item")]
+[JsonDerivedType(typeof(HistoryItemReplyMessage), "history-item-reply")]
 [JsonDerivedType(typeof(FileReadRequestMessage), "file-read")]
 [JsonDerivedType(typeof(FileReadReplyMessage), "file-read-reply")]
 [JsonDerivedType(typeof(PairingStartMessage), "pairing-start")]
@@ -30,7 +33,13 @@ namespace Cus.Core.Net;
 [JsonDerivedType(typeof(PairingResultMessage), "pairing-result")]
 public abstract record CusMessage
 {
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.General);
+    // L'encoder di default scrive ogni carattere non ASCII come \uXXXX (6 byte): un testo italiano o
+    // cinese crescerebbe fino a 6 volte. Il JSON non finisce mai in una pagina HTML, quindi l'escaping
+    // "rilassato" è sicuro qui.
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.General)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     public byte[] Serialize() => JsonSerializer.SerializeToUtf8Bytes(this, Options);
 
@@ -100,7 +109,13 @@ public sealed record SessionEndedMessage(string Reason) : CusMessage;
 
 public sealed record HistoryRequestMessage(long RequestId) : CusMessage, IRequestMessage;
 
+/// <summary>Elenco della cronologia della sessione: solo anteprime (vedi <see cref="HistoryEntry.Preview"/>).</summary>
 public sealed record HistoryReplyMessage(long RequestId, IReadOnlyList<HistoryEntry> Entries) : CusMessage, IReplyMessage;
+
+/// <summary>Membro → host: voce completa della cronologia, quando il membro la usa.</summary>
+public sealed record HistoryItemRequestMessage(long RequestId, string ItemId) : CusMessage, IRequestMessage;
+
+public sealed record HistoryItemReplyMessage(long RequestId, HistoryEntry? Entry, string? Error) : CusMessage, IReplyMessage;
 
 /// <summary>Lettura lazy di un pezzo di file: membro → host, host → PC d'origine.</summary>
 public sealed record FileReadRequestMessage(long RequestId, string ItemId, int FileIndex, long Offset, int Count)

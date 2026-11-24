@@ -12,8 +12,9 @@ namespace Cus.UI;
 /// <summary>
 /// Indicatore sempre in primo piano, una finestrella per monitor in alto a destra. Non ruba il
 /// focus (la piattaforma lo rende non attivabile tramite <paramref name="configureWindow"/>) e
-/// occupa solo la propria area: i clic altrove arrivano alle finestre sotto. Il clic
-/// sull'indicatore chiede di uscire dalla sessione.
+/// occupa solo la propria area: i clic altrove arrivano alle finestre sotto. Il doppio clic
+/// sull'indicatore chiede di uscire dalla sessione: un clic singolo (per esempio mirando alla
+/// barra di una finestra sotto) non fa nulla.
 /// </summary>
 public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Window>? configureWindow = null) : IOverlayIndicator
 {
@@ -99,11 +100,21 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
                         new TextBlock { Text = participants, FontFamily = Skin.LcdFont, FontSize = 11, Foreground = Skin.InkBrush, MaxWidth = 340, TextWrapping = TextWrapping.Wrap },
                     },
                 }),
-                Skin.Engraved("clic per uscire dalla sessione"),
+                Skin.Engraved("doppio clic per uscire dalla sessione"),
             },
         }, cornerRadius: 12);
         content.Cursor = new Cursor(StandardCursorType.Hand);
-        content.PointerPressed += (_, _) => LeaveRequested?.Invoke(this, EventArgs.Empty);
+        ToolTip.SetTip(content, "Doppio clic per uscire dalla sessione");
+        content.PointerPressed += (_, e) =>
+        {
+            // Solo un doppio clic sinistro deliberato: i clic accidentali sull'angolo in alto a destra
+            // (dove stanno i pulsanti delle finestre) non devono chiudere la condivisione.
+            if (e.ClickCount >= 2 && e.GetCurrentPoint(content).Properties.IsLeftButtonPressed)
+            {
+                e.Handled = true;
+                LeaveRequested?.Invoke(this, EventArgs.Empty);
+            }
+        };
 
         return new Window
         {

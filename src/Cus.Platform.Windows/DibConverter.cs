@@ -9,32 +9,65 @@ internal static class DibConverter
 {
     private const int BI_RGB = 0;
     private const int BI_BITFIELDS = 3;
+    private const long MaxPixels = 100_000_000;
+    private const int MaxColorsUsed = 256;
 
-    /// <exception cref="NotSupportedException">Formato DIB non gestito (palette, compressione).</exception>
+    /// <summary>
+    /// Converte un DIB letto dalla clipboard. Il contenuto viene da un'altra applicazione: ogni campo
+    /// dell'intestazione si valida prima di usarlo come dimensione o offset.
+    /// </summary>
+    /// <exception cref="InvalidDataException">DIB malformato (intestazione, dimensioni, dati troncati).</exception>
+    /// <exception cref="NotSupportedException">Formato DIB valido ma non gestito (palette, compressione).</exception>
     public static RgbaImage ToRgba(ReadOnlySpan<byte> dib)
+    {
+        try
+        {
+            return Parse(dib);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IndexOutOfRangeException or OverflowException)
+        {
+            // Rete di sicurezza: un controllo dimenticato non deve diventare un'eccezione inattesa.
+            throw new InvalidDataException("DIB non valido.", ex);
+        }
+    }
+
+    private static RgbaImage Parse(ReadOnlySpan<byte> dib)
     {
         if (dib.Length < 40)
             throw new InvalidDataException("DIB troppo corto.");
 
+        // BITMAPINFOHEADER (40), V2 (52), V3 (56), V4 (108), V5 (124): nessun'altra dimensione è valida.
         var headerSize = BinaryPrimitives.ReadInt32LittleEndian(dib);
+        if (headerSize is not (40 or 52 or 56 or 108 or 124) || dib.Length < headerSize)
+            throw new InvalidDataException($"Intestazione DIB non valida ({headerSize} byte).");
+
         var width = BinaryPrimitives.ReadInt32LittleEndian(dib[4..]);
         var rawHeight = BinaryPrimitives.ReadInt32LittleEndian(dib[8..]);
         var bitCount = BinaryPrimitives.ReadUInt16LittleEndian(dib[14..]);
         var compression = BinaryPrimitives.ReadInt32LittleEndian(dib[16..]);
         var colorsUsed = BinaryPrimitives.ReadInt32LittleEndian(dib[32..]);
 
+        // int.MinValue non ha opposto: Math.Abs lancerebbe OverflowException.
+        if (rawHeight == int.MinValue)
+            throw new InvalidDataException("Altezza DIB non valida.");
         var topDown = rawHeight < 0;
         var height = Math.Abs(rawHeight);
-        if (width <= 0 || height <= 0 || (long)width * height > 100_000_000)
+        if (width <= 0 || height <= 0 || (long)width * height > MaxPixels)
             throw new InvalidDataException("Dimensioni DIB non valide.");
         if (bitCount is not (24 or 32) || compression is not (BI_RGB or BI_BITFIELDS))
             throw new NotSupportedException($"DIB a {bitCount} bit con compressione {compression} non supportato.");
+        if (colorsUsed is < 0 or > MaxColorsUsed)
+            throw new InvalidDataException($"Numero di colori della palette non valido ({colorsUsed}).");
 
         uint redMask = 0x00FF0000, greenMask = 0x0000FF00, blueMask = 0x000000FF, alphaMask = bitCount == 32 ? 0xFF000000 : 0;
-        var pixelOffset = headerSize;
+        long pixelOffset = headerSize;
         if (compression == BI_BITFIELDS)
         {
+            // Con l'intestazione da 40 byte le maschere seguono l'intestazione; dalla V2 in poi ne fanno parte.
             var maskOffset = headerSize >= 52 ? 40 : headerSize;
+            var maskBytes = headerSize >= 56 ? 16 : 12;
+            if (dib.Length < maskOffset + maskBytes)
+                throw new InvalidDataException("Maschere DIB troncate.");
             redMask = BinaryPrimitives.ReadUInt32LittleEndian(dib[maskOffset..]);
             greenMask = BinaryPrimitives.ReadUInt32LittleEndian(dib[(maskOffset + 4)..]);
             blueMask = BinaryPrimitives.ReadUInt32LittleEndian(dib[(maskOffset + 8)..]);
@@ -43,16 +76,16 @@ internal static class DibConverter
                 pixelOffset += 12;
         }
 
-        pixelOffset += colorsUsed * 4;
-        var stride = (width * bitCount + 31) / 32 * 4;
-        if (dib.Length < pixelOffset + (long)stride * height)
+        pixelOffset += colorsUsed * 4L;
+        var stride = ((long)width * bitCount + 31) / 32 * 4;
+        if (dib.Length < pixelOffset + stride * height)
             throw new InvalidDataException("Dati DIB insufficienti.");
 
-        var pixels = new byte[width * height * 4];
+        var pixels = new byte[checked(width * height * 4)];
         var anyAlpha = false;
         for (var y = 0; y < height; y++)
         {
-            var sourceRow = dib.Slice(pixelOffset + (topDown ? y : height - 1 - y) * stride, stride);
+            var sourceRow = dib.Slice((int)(pixelOffset + (topDown ? y : height - 1 - y) * stride), (int)stride);
             for (var x = 0; x < width; x++)
             {
                 var target = (y * width + x) * 4;

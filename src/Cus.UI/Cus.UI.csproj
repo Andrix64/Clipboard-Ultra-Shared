@@ -14,6 +14,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Icona dell'app (telaio metallico + LCD lime, vedi Skin.cs): la usano le finestre via avares://
+         e Cus.App.Windows come icona dell'eseguibile. -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
   </ItemGroup>
 

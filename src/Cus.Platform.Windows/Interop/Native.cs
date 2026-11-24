@@ -168,6 +168,12 @@ internal static unsafe partial class Native
         if (handle == 0)
             throw new OutOfMemoryException("GlobalAlloc fallita.");
         var pointer = GlobalLock(handle);
+        if (pointer == 0)
+        {
+            GlobalFree(handle);
+            throw new OutOfMemoryException("GlobalLock fallita.");
+        }
+
         data.CopyTo(new Span<byte>((void*)pointer, data.Length));
         GlobalUnlock(handle);
         return handle;

@@ -111,12 +111,48 @@ internal static class Program
             },
             database, identity, monitor, writer, overlay, new AvaloniaConsentPrompt(), notifier);
 
-        async Task Shutdown()
+        // Idempotente: chiusura della finestra, riavvio con nuova identità e avvio fallito possono
+        // chiederlo più volte, ma nodo e database si chiudono una volta sola. Gira sul thread pool:
+        // chi aspetta dal thread della UI non rischia deadlock.
+        var shutdownLock = new object();
+        Task? shutdownTask = null;
+        Task Shutdown()
         {
-            await node.DisposeAsync();
-            monitor.Dispose();
-            overlay.Dispose();
-            database.Dispose();
+            lock (shutdownLock)
+                return shutdownTask ??= Task.Run(async () =>
+                {
+                    await node.DisposeAsync();
+                    monitor.Dispose();
+                    overlay.Dispose();
+                    database.Dispose();
+                });
+        }
+
+        var resetting = 0;
+        async Task ResetIdentityAndRestart()
+        {
+            if (Interlocked.Exchange(ref resetting, 1) != 0)
+                return;
+
+            // Il contesto della UI si mantiene dopo l'await: il mutex va rilasciato dal thread che lo possiede.
+            await Shutdown();
+            using (var db = CusDatabase.Open(paths, new DpapiSecretStore(paths.DataDirectory)))
+                CusNode.ResetIdentity(db);
+            mutex.ReleaseMutex();
+
+            try
+            {
+                using var restarted = Process.Start(new ProcessStartInfo(Environment.ProcessPath!, args) { UseShellExecute = false })
+                    ?? throw new InvalidOperationException("processo non avviato");
+            }
+            catch (Exception ex)
+            {
+                // Il nodo è già fermo: l'utente deve sapere che CUS va riaperto a mano.
+                throw new CusOperationException(
+                    $"Nuova identità creata, ma il riavvio automatico di CUS non è riuscito ({ex.Message}). Chiudi questa finestra e riapri CUS.", ex);
+            }
+
+            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }
 
         try
@@ -140,15 +176,7 @@ internal static class Program
             Notifier = notifier,
             Simulation = simulation,
             Shutdown = Shutdown,
-            ResetIdentityAndRestart = () =>
-            {
-                Shutdown().GetAwaiter().GetResult();
-                using (var db = CusDatabase.Open(paths, new DpapiSecretStore(paths.DataDirectory)))
-                    CusNode.ResetIdentity(db);
-                mutex.ReleaseMutex();
-                Process.Start(new ProcessStartInfo(Environment.ProcessPath!, args) { UseShellExecute = false });
-                (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
-            },
+            ResetIdentityAndRestart = ResetIdentityAndRestart,
         };
     }
 
