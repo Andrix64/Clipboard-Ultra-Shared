@@ -12,6 +12,9 @@ public sealed class AvaloniaNotifier(Func<Screens?> screens, string title, Actio
 {
     private static readonly TimeSpan Duration = TimeSpan.FromSeconds(6);
 
+    /// <summary>Notifiche visibili, dalla più vecchia. Usata solo sul thread della UI.</summary>
+    private readonly List<Window> _open = [];
+
     public event Action<string, bool>? Notified;
 
     public void Info(string message) => Show(message, isError: false);
@@ -51,18 +54,35 @@ public sealed class AvaloniaNotifier(Func<Screens?> screens, string title, Actio
                 },
             }, cornerRadius: 10),
         };
-        window.SizeChanged += (_, e) =>
+        // Più notifiche ravvicinate si impilano verso l'alto invece di coprirsi a vicenda.
+        _open.Add(window);
+        window.SizeChanged += (_, _) => Arrange();
+        window.Closed += (_, _) =>
         {
-            if (screens()?.Primary is { } screen)
-            {
-                var area = screen.WorkingArea;
-                var size = e.NewSize * screen.Scaling;
-                window.Position = new PixelPoint(area.Right - (int)size.Width - 16, area.Bottom - (int)size.Height - 16);
-            }
+            _open.Remove(window);
+            Arrange();
         };
         window.PointerPressed += (_, _) => window.Close();
         window.Show();
         configureWindow?.Invoke(window);
         DispatcherTimer.RunOnce(window.Close, Duration);
     });
+
+    /// <summary>La più recente in basso a destra, le precedenti sopra. Sul thread della UI.</summary>
+    private void Arrange()
+    {
+        if (screens()?.Primary is not { } screen)
+            return;
+
+        const int gap = 8;
+        var area = screen.WorkingArea;
+        var bottom = area.Bottom - 16;
+        for (var i = _open.Count - 1; i >= 0; i--)
+        {
+            var window = _open[i];
+            var size = window.ClientSize * screen.Scaling;
+            window.Position = new PixelPoint(area.Right - (int)size.Width - 16, bottom - (int)size.Height);
+            bottom -= (int)size.Height + gap;
+        }
+    }
 }

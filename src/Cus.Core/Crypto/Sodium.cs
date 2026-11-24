@@ -1,5 +1,9 @@
 using System.Runtime.InteropServices;
 
+// libsodium si carica solo dalla cartella dell'applicazione o da System32, mai dalla cartella
+// corrente o dal PATH (DLL hijacking).
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.System32)]
+
 namespace Cus.Core.Crypto;
 
 /// <summary>

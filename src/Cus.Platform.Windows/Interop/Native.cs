@@ -1,5 +1,8 @@
 using System.Runtime.InteropServices;
 
+// Le DLL di sistema si cercano solo in System32 e nella cartella dell'applicazione (DLL hijacking).
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.System32)]
+
 namespace Cus.Platform.Windows.Interop;
 
 internal static unsafe partial class Native

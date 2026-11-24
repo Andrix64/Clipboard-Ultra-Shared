@@ -303,7 +303,36 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
 
     public void SetSize(long libNewSize) => throw new COMException("Sola lettura.", STG_E_INVALIDFUNCTION);
 
-    public void CopyTo(IStream pstm, long cb, nint pcbRead, nint pcbWritten) => throw new COMException("Non supportato.", STG_E_INVALIDFUNCTION);
+    /// <summary>Alcuni programmi in cui si incolla copiano lo stream con CopyTo invece di Read.</summary>
+    public void CopyTo(IStream pstm, long cb, nint pcbRead, nint pcbWritten)
+    {
+        var buffer = new byte[64 * 1024];
+        long read = 0, written = 0;
+        var count = Marshal.AllocCoTaskMem(sizeof(int));
+        try
+        {
+            while (read < cb)
+            {
+                Read(buffer, (int)Math.Min(buffer.Length, cb - read), count);
+                var got = Marshal.ReadInt32(count);
+                if (got <= 0)
+                    break;
+                read += got;
+                Marshal.WriteInt32(count, 0);
+                pstm.Write(buffer, got, count);
+                written += Marshal.ReadInt32(count);
+            }
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(count);
+        }
+
+        if (pcbRead != 0)
+            Marshal.WriteInt64(pcbRead, read);
+        if (pcbWritten != 0)
+            Marshal.WriteInt64(pcbWritten, written);
+    }
 
     public void Commit(int grfCommitFlags)
     {

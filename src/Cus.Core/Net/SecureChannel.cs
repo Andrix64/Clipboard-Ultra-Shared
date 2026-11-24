@@ -143,12 +143,14 @@ public sealed class SecureChannel : IAsyncDisposable
 
     /// <exception cref="EndOfStreamException">L'altra parte ha chiuso la connessione.</exception>
     /// <exception cref="ProtocolException">Messaggio alterato.</exception>
-    public async Task<byte[]> ReceiveAsync(CancellationToken cancellationToken)
+    /// <param name="maxMessageBytes">Limite più basso di <see cref="MaxMessageBytes"/>, per i messaggi di chi non è ancora fidato.</param>
+    public async Task<byte[]> ReceiveAsync(CancellationToken cancellationToken, int maxMessageBytes = MaxMessageBytes)
     {
         await _receiveLock.WaitAsync(cancellationToken);
         try
         {
-            var ciphertext = await ReadFrameAsync(_stream, MaxFrameBytes, cancellationToken);
+            var limit = Math.Min(maxMessageBytes, MaxMessageBytes) + Sodium.SecretStreamABytes;
+            var ciphertext = await ReadFrameAsync(_stream, limit, cancellationToken);
             if (!Sodium.SecretStreamPull(_receiveState, ciphertext, out var message))
                 throw new ProtocolException("Messaggio alterato o fuori ordine.");
             return message;

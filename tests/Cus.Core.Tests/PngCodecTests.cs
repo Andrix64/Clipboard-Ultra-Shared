@@ -83,6 +83,29 @@ public class PngCodecTests
     }
 
     [Fact]
+    public void Decode_TinyPngClaimingManyPixels_IsRejectedBeforeAllocating()
+    {
+        // Pochi byte compressi non possono contenere 5000 x 5000 RGBA a 16 bit (circa 200 MB).
+        var png = BuildPng(5000, 5000, 16, 6, [0]);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        Assert.Throws<InvalidDataException>(() => PngCodec.Decode(png));
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 10 * 1024 * 1024);
+    }
+
+    [Fact]
+    public void Decode_ChunkLengthNearIntMax_IsInvalidData()
+    {
+        using var output = new MemoryStream();
+        output.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+        output.Write([0x7F, 0xFF, 0xFF, 0xF8]);
+        output.Write("IDAT"u8);
+        output.Write(new byte[8]);
+
+        Assert.Throws<InvalidDataException>(() => PngCodec.Decode(output.ToArray()));
+    }
+
+    [Fact]
     public void Decode_ShortIhdr_IsInvalidData()
     {
         using var output = new MemoryStream();

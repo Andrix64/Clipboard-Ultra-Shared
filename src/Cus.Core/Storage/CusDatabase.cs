@@ -84,7 +84,17 @@ public sealed class CusDatabase : IDisposable
             secrets.Save(DatabaseKeyName, key);
         }
 
-        return new CusDatabase(EncryptedDatabase.Open(paths.DatabasePath, key));
+        var connection = EncryptedDatabase.Open(paths.DatabasePath, key);
+        try
+        {
+            return new CusDatabase(connection);
+        }
+        catch
+        {
+            // Migrazione fallita (per esempio DB di una versione più recente): il file non resta aperto.
+            connection.Dispose();
+            throw;
+        }
     }
 
     public int CurrentSchemaVersion()

@@ -131,18 +131,19 @@ public sealed class PeerConnection : IAsyncDisposable
     }
 
     /// <summary>Riceve un singolo messaggio, prima di <see cref="Start"/> (fasi iniziali del protocollo).</summary>
-    public async Task<CusMessage> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    /// <param name="maxBytes">Dimensione massima accettata: più bassa per chi non è ancora fidato.</param>
+    public async Task<CusMessage> ReceiveAsync(TimeSpan timeout, CancellationToken cancellationToken = default, int maxBytes = SecureChannel.MaxMessageBytes)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         cts.CancelAfter(timeout);
-        var message = CusMessage.Deserialize(await _channel.ReceiveAsync(cts.Token));
+        var message = CusMessage.Deserialize(await _channel.ReceiveAsync(cts.Token, maxBytes));
         Interlocked.Exchange(ref _lastReceivedTicks, Environment.TickCount64);
         return message;
     }
 
-    public async Task<T> ReceiveAsync<T>(TimeSpan timeout, CancellationToken cancellationToken = default) where T : CusMessage
+    public async Task<T> ReceiveAsync<T>(TimeSpan timeout, CancellationToken cancellationToken = default, int maxBytes = SecureChannel.MaxMessageBytes) where T : CusMessage
     {
-        var message = await ReceiveAsync(timeout, cancellationToken);
+        var message = await ReceiveAsync(timeout, cancellationToken, maxBytes);
         return message as T ?? throw new ProtocolException($"Atteso {typeof(T).Name}, ricevuto {message.GetType().Name}.");
     }
 
@@ -159,9 +160,13 @@ public sealed class PeerConnection : IAsyncDisposable
         {
             await _channel.SendAsync(payload, cts.Token);
         }
-        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException or OperationCanceledException)
         {
+            // Un invio interrotto, anche per annullamento di chi chiama, può lasciare un frame a metà
+            // e il flusso cifrato avanzato: la connessione non è più utilizzabile e si chiude sempre.
             Close($"invio fallito: {ex.Message}");
+            if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                throw;
             throw new IOException($"Connessione con {Remote.DisplayName} interrotta.", ex);
         }
     }

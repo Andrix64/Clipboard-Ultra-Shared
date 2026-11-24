@@ -68,7 +68,6 @@ public sealed partial class CusNode
             _gate.Release();
         }
 
-        var added = false;
         try
         {
             Log($"Richiesta di accesso inviata a {name}.");
@@ -92,11 +91,17 @@ public sealed partial class CusNode
                     throw new CusOperationException("La sessione è terminata mentre si attendeva la risposta.");
                 }
 
+                // Due inviti allo stesso PC partiti insieme: vince il primo, l'altro si chiude.
+                if (_hostSession.Members.ContainsKey(connection.Remote.DeviceId))
+                {
+                    await connection.CloseAsync("già nella sessione");
+                    throw new CusOperationException($"{name} è già nella sessione.");
+                }
+
                 _hostSession.Members[connection.Remote.DeviceId] = new Member(connection, direction);
                 connection.MessageHandler = HostHandleMessageAsync;
-                connection.Closed += (c, reason) => _ = Task.Run(() => OnMemberClosedAsync(c, reason));
+                connection.Closed += (c, reason) => RunInBackground(() => OnMemberClosedAsync(c, reason));
                 connection.Start();
-                added = true;
                 RaiseSessionChanged();
             }
             finally
@@ -123,7 +128,10 @@ public sealed partial class CusNode
                 if (_hostSession is { } session && session.Id == sessionId)
                 {
                     session.PendingInvites--;
-                    if (!added && session.Members.IsEmpty && session.PendingInvites == 0)
+                    // Anche se il membro è stato aggiunto: può essersi già disconnesso mentre questo
+                    // invito era in corso, e OnMemberClosedAsync non ha chiuso la sessione per via
+                    // dell'invito ancora in sospeso.
+                    if (session.Members.IsEmpty && session.PendingInvites == 0)
                     {
                         _hostSession = null;
                         RaiseSessionChanged();
@@ -142,15 +150,20 @@ public sealed partial class CusNode
         if (HandleCommonMessage(connection, message))
             return;
 
+        // Solo la connessione registrata come membro: non una rimasta orfana (sessione chiusa, invito doppio).
+        if (CurrentMember(connection) is not { } member)
+            return;
+
         switch (message)
         {
             case ClipboardPushMessage push:
                 var why = push.ItemId is null || push.Content is null ? "messaggio incompleto"
+                    : !IsValidItemId(push.ItemId) ? "identificativo non valido"
                     : IsAcceptableContent(push.Content, out var reason) ? null : reason;
                 if (why is not null)
                 {
                     Log($"Copia di {connection.Remote.DisplayName} ignorata: {why}");
-                    if (push.ItemId is not null)
+                    if (push.ItemId is { Length: <= 64 })
                         await AcknowledgeIgnoredPushAsync(connection, push.ItemId);
                     return;
                 }
@@ -161,14 +174,31 @@ public sealed partial class CusNode
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
                 break;
+            // Sola lettura: il membro invia le sue copie ma non riceve quelle altrui, nemmeno dalla cronologia.
             case HistoryRequestMessage request:
-                await connection.SendAsync(new HistoryReplyMessage(request.RequestId, SessionHistoryPreviews(connection)));
+                await connection.SendAsync(new HistoryReplyMessage(request.RequestId,
+                    member.Direction == ShareDirection.ReadOnly ? [] : SessionHistoryPreviews(connection)));
+                break;
+            case HistoryItemRequestMessage request when member.Direction == ShareDirection.ReadOnly:
+                await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, null, "In sola lettura la cronologia non è disponibile."));
                 break;
             case HistoryItemRequestMessage request:
                 await SendHistoryItemAsync(connection, request);
                 break;
         }
     }
+
+    /// <summary>Il membro della sessione host collegato con questa connessione, se lo è ancora.</summary>
+    private Member? CurrentMember(PeerConnection connection) =>
+        _hostSession is { } session
+        && session.Members.TryGetValue(connection.Remote.DeviceId, out var member)
+        && member.Connection == connection
+            ? member
+            : null;
+
+    /// <summary>Formato di <see cref="NewId"/>: 24 cifre esadecimali maiuscole.</summary>
+    private static bool IsValidItemId(string? itemId) =>
+        itemId is { Length: 24 } && itemId.All(char.IsAsciiHexDigitUpper);
 
     /// <summary>
     /// Ai membri va solo la cronologia della sessione in corso, e solo come anteprime: voci di
@@ -231,11 +261,22 @@ public sealed partial class CusNode
     /// <param name="localStamp">Per le copie dell'host: quando è avvenuta la copia (vedi _clipboardStamp).</param>
     private async Task DistributeAsync(string originId, string originName, string itemId, ClipboardContent content, PeerConnection? originConnection, long localStamp = 0)
     {
+        // Una copia di un membro va sempre confermata, qualunque cosa succeda qui: senza conferma il
+        // membro la crederebbe in viaggio e ignorerebbe ogni copia successiva.
+        var acknowledged = originConnection is null;
         await _gate.WaitAsync();
         try
         {
             if (_hostSession is not { } session)
                 return;
+
+            // Un identificativo già usato sostituirebbe, nella cronologia e nelle letture dei file,
+            // la voce di un altro PC.
+            if (originConnection is not null && (session.ItemOrigins.ContainsKey(itemId) || _database.GetHistoryEntry(itemId) is not null))
+            {
+                Log($"Copia di {originName} ignorata: identificativo già usato");
+                return;
+            }
 
             // Una copia dell'host superata da una copia remota già scritta nella sua clipboard è
             // vecchia: distribuirla renderebbe la clipboard dell'host diversa da quella dei membri.
@@ -250,7 +291,7 @@ public sealed partial class CusNode
             }
 
             var sequence = ++session.Sequence;
-            session.ItemOrigins[itemId] = originId;
+            session.RememberOrigin(itemId, originId);
             _database.AddHistory(new HistoryEntry(itemId, session.Id, sequence, originId, originName, content, DateTimeOffset.UtcNow));
 
             if (originConnection is not null)
@@ -268,6 +309,7 @@ public sealed partial class CusNode
                     _notifier.Error($"Impossibile scrivere nella clipboard: {ex.Message}");
                 }
 
+                acknowledged = true;
                 try
                 {
                     await originConnection.SendAsync(new ClipboardAckMessage(itemId, sequence));
@@ -291,6 +333,18 @@ public sealed partial class CusNode
         }
         finally
         {
+            if (!acknowledged)
+            {
+                try
+                {
+                    await originConnection!.SendAsync(new ClipboardAckMessage(itemId, _hostSession?.Sequence ?? 0));
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
+                {
+                    // Origine caduta.
+                }
+            }
+
             _gate.Release();
         }
     }
@@ -448,7 +502,7 @@ public sealed partial class CusNode
                 new SessionParticipant(Identity.DisplayName, direction, IsHost: false),
             ]));
             connection.MessageHandler = MemberHandleMessageAsync;
-            connection.Closed += (c, why) => _ = Task.Run(() => OnHostClosedAsync(c, why));
+            connection.Closed += (c, why) => RunInBackground(() => OnHostClosedAsync(c, why));
             connection.Start();
             RaiseSessionChanged();
         }
@@ -516,7 +570,7 @@ public sealed partial class CusNode
 
     private async Task ApplyItemAsync(PeerConnection connection, ClipboardItemMessage item)
     {
-        if (item.Content is null || item.ItemId is null)
+        if (item.Content is null || !IsValidItemId(item.ItemId))
         {
             Log("Copia ignorata: messaggio incompleto");
             return;
@@ -535,11 +589,15 @@ public sealed partial class CusNode
                 return;
             session.LastSequence = item.Sequence;
 
+            // Sola lettura scelta qui: vale anche se l'host non la rispetta.
+            if (session.Direction == ShareDirection.ReadOnly)
+                return;
+
             // Una propria copia è ancora in viaggio verso l'host: verrà ordinata dopo questa e la
             // supererà. Applicare questa ora lascerebbe questo PC diverso dagli altri.
             if (session.PendingPushes.Count > 0)
                 return;
-            var source = item.Content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, connection, item.ItemId) : null;
+            var source = item.Content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, connection, item.ItemId!) : null;
             await _writer.WriteAsync(item.Content, source);
         }
         catch (Exception ex)
@@ -829,9 +887,12 @@ public sealed partial class CusNode
     {
         var host = _hostSession;
         var member = _memberSession;
-        var inSession = host?.Members.Values.Any(m => m.Connection == connection) == true || member?.Host == connection;
+        var hostMember = host?.Members.Values.FirstOrDefault(m => m.Connection == connection);
+        var inSession = hostMember is not null || member?.Host == connection;
         if (!inSession)
             throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo non è nella sessione.");
+        if (hostMember?.Direction == ShareDirection.ReadOnly)
+            throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo è in sola lettura.");
 
         if (TryReadLocalOffer(request.ItemId, request.FileIndex, request.Offset, request.Count, out var data))
             return data;
@@ -840,7 +901,7 @@ public sealed partial class CusNode
         {
             var originId = host.ItemOrigins.TryGetValue(request.ItemId, out var id)
                 ? id
-                : _database.GetHistory().FirstOrDefault(h => h.ItemId == request.ItemId)?.OriginDeviceId;
+                : _database.GetHistoryEntry(request.ItemId)?.OriginDeviceId;
             if (originId is not null && originId != Identity.DeviceId)
             {
                 if (!host.Members.TryGetValue(originId, out var origin) || origin.Connection == connection)
@@ -911,11 +972,25 @@ public sealed partial class CusNode
 
     private sealed class HostSession(string id)
     {
+        private const int MaxItemOrigins = 256;
+
         public string Id { get; } = id;
 
         public ConcurrentDictionary<string, Member> Members { get; } = new();
 
+        /// <summary>Origine delle copie recenti, per inoltrare le letture dei file. Le più vecchie si cercano nella cronologia.</summary>
         public ConcurrentDictionary<string, string> ItemOrigins { get; } = new();
+
+        private readonly Queue<string> _itemOrder = new();
+
+        /// <summary>Chiamato sotto _gate.</summary>
+        public void RememberOrigin(string itemId, string originId)
+        {
+            ItemOrigins[itemId] = originId;
+            _itemOrder.Enqueue(itemId);
+            while (_itemOrder.Count > MaxItemOrigins && _itemOrder.TryDequeue(out var old))
+                ItemOrigins.TryRemove(old, out _);
+        }
 
         public long Sequence { get; set; }
 

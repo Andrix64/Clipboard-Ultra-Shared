@@ -20,7 +20,16 @@ namespace Cus.Core.Node;
 /// </summary>
 public sealed partial class CusNode : IAsyncDisposable
 {
-    private static readonly TimeSpan FirstMessageTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan FirstMessageTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Lista di fiducia da chi non è nel gruppo: in genere vuota, comunque non più di così.</summary>
+    private const int PreTrustSyncMaxBytes = 1024 * 1024;
+
+    /// <summary>Primo messaggio (invito o avvio dell'abbinamento): piccolo.</summary>
+    private const int FirstMessageMaxBytes = 64 * 1024;
+
+    /// <summary>Connessioni in fase iniziale da uno stesso indirizzo (il loopback, usato dalle istanze locali, è escluso).</summary>
+    private const int MaxPendingIncomingPerAddress = 4;
     private static readonly TimeSpan FileReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SyncInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(15);
@@ -41,10 +50,12 @@ public sealed partial class CusNode : IAsyncDisposable
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ConcurrentDictionary<PeerConnection, byte> _connections = new();
+    private readonly ConcurrentDictionary<Task, byte> _background = new();
     private readonly ConcurrentDictionary<string, (DiscoveryAnnouncement Announcement, DateTimeOffset Seen)> _discovered = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSync = new();
     private readonly Lock _offerGate = new();
     private readonly SemaphoreSlim _incomingSlots = new(MaxPendingIncoming, MaxPendingIncoming);
+    private readonly ConcurrentDictionary<IPAddress, int> _pendingByAddress = new();
     private readonly SemaphoreSlim _fileReadSlots = new(8, 8);
 
     /// <summary>Le copie locali si elaborano una alla volta, nell'ordine in cui sono avvenute.</summary>
@@ -82,9 +93,9 @@ public sealed partial class CusNode : IAsyncDisposable
         _consent = consent;
         _notifier = notifier;
         Trust = new TrustLog(database, identity);
-        Trust.Changed += (_, _) => _ = Task.Run(OnTrustChangedAsync);
+        Trust.Changed += (_, _) => RunInBackground(OnTrustChangedAsync);
         _monitor.Changed += (_, e) => _localChanges.Writer.TryWrite(e);
-        _overlay.LeaveRequested += (_, _) => _ = Task.Run(() => LeaveSessionAsync());
+        _overlay.LeaveRequested += (_, _) => RunInBackground(() => LeaveSessionAsync());
     }
 
     public DeviceIdentity Identity { get; }
@@ -191,10 +202,10 @@ public sealed partial class CusNode : IAsyncDisposable
             }
         }
 
-        _ = Task.Run(ProcessLocalChangesAsync);
+        RunInBackground(ProcessLocalChangesAsync);
         _monitor.Start();
         Log($"In ascolto sulla porta {Port}.");
-        _ = Task.Run(SyncWithKnownDevicesAsync);
+        RunInBackground(SyncWithKnownDevicesAsync);
         await Task.CompletedTask;
     }
 
@@ -220,6 +231,39 @@ public sealed partial class CusNode : IAsyncDisposable
             try { await _acceptLoop; }
             catch (Exception) { /* chiusura */ }
         }
+
+        // Chi chiama chiude il database subito dopo: le attività in sottofondo (connessioni in
+        // ingresso, sincronizzazioni, uscite dei membri) devono essere finite, entro un limite.
+        var pending = _background.Keys.ToArray();
+        if (pending.Length > 0)
+            await Task.WhenAny(Task.WhenAll(pending), Task.Delay(BackgroundShutdownTimeout));
+    }
+
+    private static readonly TimeSpan BackgroundShutdownTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Lavoro in sottofondo: un'eccezione si registra invece di perdersi, e <see cref="DisposeAsync"/>
+    /// aspetta che finisca prima che si chiuda il database.
+    /// </summary>
+    private void RunInBackground(Func<Task> work)
+    {
+        var task = Task.Run(async () =>
+        {
+            try
+            {
+                await work();
+            }
+            catch (Exception ex) when (_lifetime.IsCancellationRequested && ex is OperationCanceledException or ObjectDisposedException)
+            {
+                // Chiusura in corso.
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.WriteLine($"CUS: errore in un'attività in sottofondo: {ex}");
+            }
+        });
+        _background[task] = 0;
+        task.ContinueWith(t => _background.TryRemove(t, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     // ================================================================ peer manuali
@@ -292,24 +336,63 @@ public sealed partial class CusNode : IAsyncDisposable
 
             // Chiunque in rete può collegarsi: oltre un certo numero di connessioni ancora in fase
             // iniziale le nuove si rifiutano subito, invece di accumulare memoria e task.
-            if (!_incomingSlots.Wait(0))
+            var address = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+            if (!TryTakePendingSlot(address))
             {
                 client.Dispose();
                 continue;
             }
 
-            _ = Task.Run(async () =>
+            RunInBackground(async () =>
             {
                 try
                 {
                     await HandleIncomingAsync(client);
                 }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Trace.WriteLine($"CUS: errore nella connessione in ingresso: {ex}");
+                }
                 finally
                 {
-                    _incomingSlots.Release();
+                    ReleasePendingSlot(address);
                 }
             });
         }
+    }
+
+    /// <summary>Uno slot globale più uno per indirizzo: un solo PC in rete non li occupa tutti.</summary>
+    private bool TryTakePendingSlot(IPAddress? address)
+    {
+        var perAddress = address is not null && !IPAddress.IsLoopback(address);
+        if (perAddress)
+        {
+            var count = _pendingByAddress.AddOrUpdate(address!, 1, (_, n) => n + 1);
+            if (count > MaxPendingIncomingPerAddress)
+            {
+                ReleaseAddress(address!);
+                return false;
+            }
+        }
+
+        if (_incomingSlots.Wait(0))
+            return true;
+        if (perAddress)
+            ReleaseAddress(address!);
+        return false;
+    }
+
+    private void ReleasePendingSlot(IPAddress? address)
+    {
+        _incomingSlots.Release();
+        if (address is not null && !IPAddress.IsLoopback(address))
+            ReleaseAddress(address);
+    }
+
+    private void ReleaseAddress(IPAddress address)
+    {
+        if (_pendingByAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0)
+            _pendingByAddress.TryRemove(new KeyValuePair<IPAddress, int>(address, 0));
     }
 
     /// <summary>Handshake, saluto e scambio della lista di fiducia: comune a ogni connessione.</summary>
@@ -323,7 +406,8 @@ public sealed partial class CusNode : IAsyncDisposable
         var inGroup = Trust.State.IsGroupMember(remoteId);
         var share = inGroup || shareWith?.Contains(remoteId) == true;
         await connection.SendAsync(new TrustSyncMessage(share ? Trust.Entries : []));
-        var sync = await connection.ReceiveAsync<TrustSyncMessage>(PeerConnection.HandshakeTimeout);
+        var sync = await connection.ReceiveAsync<TrustSyncMessage>(PeerConnection.HandshakeTimeout,
+            maxBytes: inGroup ? SecureChannel.MaxMessageBytes : PreTrustSyncMaxBytes);
         if (inGroup)
         {
             Trust.Merge(sync.Entries ?? []);
@@ -376,8 +460,11 @@ public sealed partial class CusNode : IAsyncDisposable
         PeerConnection? connection = null;
         try
         {
-            connection = await SetUpConnectionAsync(await PeerConnection.AcceptAsync(client, Identity, Port, _lifetime.Token));
-            var first = await connection.ReceiveAsync(FirstMessageTimeout);
+            // Assegnata prima della fase iniziale: se questa fallisce la connessione va chiusa (e tolta
+            // da _connections), non solo il socket.
+            connection = await PeerConnection.AcceptAsync(client, Identity, Port, _lifetime.Token);
+            await SetUpConnectionAsync(connection);
+            var first = await connection.ReceiveAsync(FirstMessageTimeout, maxBytes: FirstMessageMaxBytes);
             switch (first)
             {
                 case SessionInviteMessage invite:
@@ -431,16 +518,23 @@ public sealed partial class CusNode : IAsyncDisposable
             && (!_lastSync.TryGetValue(announcement.DeviceId, out var last) || DateTimeOffset.UtcNow - last > SyncInterval))
         {
             _lastSync[announcement.DeviceId] = DateTimeOffset.UtcNow;
-            _ = Task.Run(() => SyncWithAsync(announcement.Host, announcement.Port));
+            RunInBackground(() => SyncWithAsync(announcement.Host, announcement.Port, announcement.DeviceId));
         }
     }
 
     /// <summary>Sincronizza la lista di fiducia con un dispositivo dell'utente e chiude.</summary>
-    public async Task SyncWithAsync(string host, int port)
+    /// <param name="expectedDeviceId">Per gli annunci (non autenticati): l'identità che deve rispondere.</param>
+    public async Task SyncWithAsync(string host, int port, string? expectedDeviceId = null)
     {
         try
         {
             var connection = await ConnectAsync(host, port, _lifetime.Token);
+            if (expectedDeviceId is not null && !string.Equals(connection.Remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                connection.Close("identità diversa da quella annunciata");
+                return;
+            }
+
             await connection.CloseAsync("sincronizzazione completata");
         }
         catch (Exception ex)
@@ -492,7 +586,7 @@ public sealed partial class CusNode : IAsyncDisposable
         // ferma da sola quando nessuno ha più voci nuove.
         if (!state.SelfRevoked && Interlocked.Exchange(ref _syncScheduled, 1) == 0)
         {
-            _ = Task.Run(async () =>
+            RunInBackground(async () =>
             {
                 try
                 {
@@ -566,7 +660,7 @@ public sealed partial class CusNode : IAsyncDisposable
 
         if (message is FileReadRequestMessage read)
         {
-            _ = Task.Run(() => ServeFileReadAsync(connection, read));
+            RunInBackground(() => ServeFileReadAsync(connection, read));
             return true;
         }
 

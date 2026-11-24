@@ -1,10 +1,15 @@
+using Cus.Core.Hosting;
 using Cus.Core.Identity;
+using Cus.Core.Storage;
 using Cus.Core.Trust;
+using Cus.Platform.Simulated;
 
 namespace Cus.Core.Tests;
 
-public class TrustLogTests
+public sealed class TrustLogTests : IDisposable
 {
+    private readonly TempDirectory _temp = new();
+
     private static readonly DateTimeOffset T0 = new(2026, 11, 24, 10, 0, 0, TimeSpan.Zero);
 
     private readonly DeviceIdentity _a = DeviceIdentity.Generate("a", "u");
@@ -92,6 +97,67 @@ public class TrustLogTests
         Assert.True(state.IsTrusted(_b.DeviceId));
         Assert.False(forged.HasValidSignature());
     }
+
+    [Fact]
+    public void Merge_RevokedDeviceCannotRevokeOthers_EvenWithBackdatedEntries()
+    {
+        using var db = OpenDatabase();
+        var log = new TrustLog(db, _a);
+        log.Merge([Pair(_a, _b), Pair(_b, _a), Pair(_a, _c), Pair(_c, _a), Pair(_b, _c)]);
+        log.Revoke(_c.Info);
+
+        // C, già revocato, firma revoche (anche retrodatate) contro B, e un'identità nuova abbinata da lui.
+        var fresh = DeviceIdentity.Generate("nuovo", "x");
+        var backdated = TrustEntry.Create(_c, TrustEntryKind.Revoke, _b.Info, T0.AddDays(-1));
+        log.Merge([backdated, Pair(_c, fresh), TrustEntry.Create(fresh, TrustEntryKind.Revoke, _b.Info, T0.AddDays(-1))]);
+
+        Assert.True(log.State.IsTrusted(_b.DeviceId));
+        Assert.False(log.State.IsRevoked(_b.DeviceId));
+        Assert.False(log.State.IsGroupMember(fresh.DeviceId));
+    }
+
+    [Fact]
+    public void Merge_RevokedDeviceCanStillRevokeItsRevoker_MutualRevocation()
+    {
+        using var db = OpenDatabase();
+        var log = new TrustLog(db, _c);
+        log.Merge([Pair(_c, _a), Pair(_a, _c), Pair(_a, _b), Pair(_b, _a)]);
+        log.Merge([Revoke(_a, _b)]);
+        log.Merge([TrustEntry.Create(_b, TrustEntryKind.Revoke, _a.Info, T0.AddMinutes(5))]);
+
+        Assert.True(log.State.IsRevoked(_a.DeviceId));
+        Assert.True(log.State.IsRevoked(_b.DeviceId));
+    }
+
+    [Fact]
+    public void Merge_RevocationMadeBeforeTheActorWasRevoked_IsKeptInTheSameBatch()
+    {
+        // C revoca B (B rubato), poi A revoca C: chi riceve le due voci insieme le tiene entrambe.
+        using var db = OpenDatabase();
+        var log = new TrustLog(db, _a);
+        log.Merge([Pair(_a, _b), Pair(_b, _a), Pair(_a, _c), Pair(_c, _a)]);
+        log.Merge([Revoke(_a, _c), TrustEntry.Create(_c, TrustEntryKind.Revoke, _b.Info, T0)]);
+
+        Assert.True(log.State.IsRevoked(_b.DeviceId));
+        Assert.True(log.State.IsRevoked(_c.DeviceId));
+    }
+
+    [Fact]
+    public void Merge_RejectsUndefinedKind_SoTheGenuineEntryIsNotShadowed()
+    {
+        using var db = OpenDatabase();
+        var log = new TrustLog(db, _a);
+        log.Merge([Pair(_a, _b), Pair(_b, _a)]);
+        var genuine = TrustEntry.Create(_a, TrustEntryKind.Revoke, _b.Info, T0.AddMinutes(1));
+
+        Assert.False(log.Merge([genuine with { Kind = (TrustEntryKind)99 }]));
+        Assert.True(log.Merge([genuine]));
+        Assert.True(log.State.IsRevoked(_b.DeviceId));
+    }
+
+    public void Dispose() => _temp.Dispose();
+
+    private CusDatabase OpenDatabase() => CusDatabase.Open(new ProfileAppPaths("trust", _temp.Path), new InMemorySecretStore());
 
     private static string Describe(TrustState state) =>
         string.Join(",", state.Trusted.Keys.Order()) + "|" + string.Join(",", state.Revoked.Order()) + "|" + state.SelfRevoked;

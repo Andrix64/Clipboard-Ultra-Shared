@@ -33,8 +33,8 @@ public sealed record TrustState(
 /// <item>una revoca vale se il suo attore è in C; i soggetti revocati formano R (anche revoche reciproche, anche auto-revoche);</item>
 /// <item>i dispositivi fidati sono la chiusura degli abbinamenti fatti da attori non revocati, meno R.</item>
 /// </list>
-/// Essendo calcolato su un insieme che cresce soltanto, il risultato è lo stesso in qualunque
-/// ordine si uniscano le liste.
+/// Il calcolo dipende solo dall'insieme delle voci. All'ingresso però <see cref="Merge"/> scarta le
+/// voci nuove firmate da dispositivi già revocati qui (vedi lì il perché).
 /// </summary>
 public sealed class TrustLog
 {
@@ -82,25 +82,48 @@ public sealed class TrustLog
 
     public TrustEntry Revoke(DeviceInfo subject) => AddOwn(TrustEntryKind.Revoke, subject);
 
+    /// <summary>Lunghezza massima del nome del soggetto in una voce (i nomi locali sono al massimo 64 caratteri).</summary>
+    public const int MaxSubjectNameLength = 256;
+
     /// <summary>Unisce voci ricevute da un altro dispositivo dell'utente.</summary>
+    /// <remarks>
+    /// Regola 1 di IDEA.md ("una revoca è valida solo se chi la firma non era già revocato"): le
+    /// date delle voci le sceglie chi firma, quindi non provano nulla. Fa fede ciò che questo PC sa
+    /// già: una voce nuova firmata da un dispositivo che qui risulta revocato si scarta, salvo la
+    /// revoca di chi lo ha revocato (regola 4, revoca reciproca). Senza questo un dispositivo
+    /// revocato potrebbe revocare tutti gli altri, o abbinare un'identità nuova e revocare tramite lei.
+    /// Le voci accettate restano: l'insieme cresce soltanto.
+    /// </remarks>
     /// <returns>True se è cambiato qualcosa.</returns>
     public bool Merge(IEnumerable<TrustEntry> incoming)
     {
         var added = false;
         lock (_gate)
         {
-            foreach (var entry in incoming)
+            // Ordine stabile (data, poi ID): voci dello stesso lotto valutate sempre nello stesso modo.
+            var candidates = incoming
+                .Where(IsWellFormed)
+                .Select(e => (Entry: e, Id: e.EntryId))
+                .Where(c => !_known.Contains(c.Id))
+                .DistinctBy(c => c.Id)
+                .OrderBy(c => c.Entry.CreatedUtc)
+                .ThenBy(c => c.Id, StringComparer.Ordinal)
+                .ToList();
+
+            foreach (var (entry, id) in candidates)
             {
                 if (_entries.Count >= MaxEntries)
                     break;
-                if (entry is not { ActorPublicKey.Length: 32, SubjectPublicKey.Length: 32, SubjectName: not null, Signature: not null })
+                if (!entry.HasValidSignature() || IsFromRevokedActor(entry))
                     continue;
-                if (_known.Contains(entry.EntryId) || !entry.HasValidSignature())
-                    continue;
-                _known.Add(entry.EntryId);
+                _known.Add(id);
                 _database.AddTrustEntry(entry);
                 _entries.Add(entry);
                 added = true;
+
+                // Una revoca cambia chi è revocato: le voci successive del lotto vanno giudicate col nuovo stato.
+                if (entry.Kind == TrustEntryKind.Revoke)
+                    State = ComputeVerified(_self.SignPublicKey, _entries);
             }
 
             if (added)
@@ -110,6 +133,23 @@ public sealed class TrustLog
         if (added)
             Changed?.Invoke(this, EventArgs.Empty);
         return added;
+    }
+
+    private static bool IsWellFormed(TrustEntry? entry) =>
+        entry is { ActorPublicKey.Length: 32, SubjectPublicKey.Length: 32, SubjectName: not null, Signature.Length: 64 }
+        && Enum.IsDefined(entry.Kind)
+        && entry.SubjectName.Length <= MaxSubjectNameLength;
+
+    /// <summary>Voce nuova di un attore già revocato qui: valida solo se revoca chi ha revocato lui.</summary>
+    private bool IsFromRevokedActor(TrustEntry entry)
+    {
+        var actor = entry.ActorId;
+        if (!State.IsRevoked(actor))
+            return false;
+        if (entry.Kind != TrustEntryKind.Revoke)
+            return true;
+        var subject = entry.SubjectId;
+        return !_entries.Any(e => e.Kind == TrustEntryKind.Revoke && e.SubjectId == actor && e.ActorId == subject);
     }
 
     public static TrustState Compute(byte[] selfPublicKey, IReadOnlyCollection<TrustEntry> entries) =>

@@ -39,6 +39,9 @@ public class ClipboardFileNamesTests
     [InlineData("a<b>")]
     [InlineData("tab\tnel nome")]
     [InlineData("nul\0nel nome")]
+    [InlineData("fattura\u202Etxt.exe")]
+    [InlineData("nascosto\u200B.txt")]
+    [InlineData("riga\u2028due.txt")]
     public void DangerousNames_AreRejected(string name) =>
         Assert.False(ClipboardFileNames.TryValidate([new ClipboardFileInfo(name, 1)], out _));
 
@@ -72,7 +75,7 @@ public class DisplayTextTests
     public void NewlinesControlAndBidiCharacters_AreRemoved()
     {
         Assert.Equal("Mario PC", DisplayText.Sanitize("Mario\r\nPC", 64));
-        Assert.Equal("abc", DisplayText.Sanitize("a‮b​c", 64));
+        Assert.Equal("abc", DisplayText.Sanitize("a\u202Eb\u200Bc", 64));
         Assert.Equal("a b", DisplayText.Sanitize("  a \t\u0001  b ", 64));
     }
 
@@ -80,7 +83,7 @@ public class DisplayTextTests
     public void EmptyOrBlank_UsesTheFallback_AndLongTextIsCut()
     {
         Assert.Equal("(senza nome)", DisplayText.Sanitize(null, 64));
-        Assert.Equal("x", DisplayText.Sanitize("‮\n", 64, "x"));
+        Assert.Equal("x", DisplayText.Sanitize("\u202E\n", 64, "x"));
         Assert.Equal(10, DisplayText.Sanitize(new string('z', 100), 10).Length);
         Assert.Equal("a", DisplayText.Sanitize("a😀", 2));
     }

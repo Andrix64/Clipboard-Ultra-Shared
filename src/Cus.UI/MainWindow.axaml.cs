@@ -27,6 +27,9 @@ public partial class MainWindow : Window
     /// <summary>Arresto concluso: la prossima chiusura è quella vera.</summary>
     private bool _closeAllowed;
 
+    /// <summary>Aggiornamento della lista dei peer in corso: la selezione cambia, ma non per mano dell'utente.</summary>
+    private bool _refreshingPeers;
+
     /// <summary>Usato solo dal designer di Avalonia.</summary>
     public MainWindow()
         : this(MainWindowModel.Empty)
@@ -191,7 +194,8 @@ public partial class MainWindow : Window
             {
                 // Peer scoperto: l'identità che risponde deve essere quella annunciata (null per i
                 // peer aggiunti a mano, che non hanno un'identità nota).
-                await Invite(node, _peers[i].Host, _peers[i].Port, _peers[i].DeviceId);
+                var peer = _peers[i];
+                await Invite(node, peer.Host, peer.Port, peer.DeviceId);
             }
             else
             {
@@ -219,20 +223,49 @@ public partial class MainWindow : Window
         };
         PeersList.SelectionChanged += (_, _) =>
         {
-            if (PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
+            // Solo una scelta dell'utente: l'aggiornamento periodico della lista non deve
+            // sovrascrivere l'indirizzo che l'utente sta scrivendo.
+            if (!_refreshingPeers && PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
                 PairAddressInput.Text = _peers[i].Address;
         };
     }
 
     private async Task Invite(CusNode node, string host, int port, string? expectedDeviceId)
     {
-        AddActivity($"Richiesta inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
-        await Run(async () =>
+        // Un solo invito alla volta: un doppio clic non deve mandarne due allo stesso PC.
+        if (!InviteButton.IsEnabled)
+            return;
+        InviteButton.IsEnabled = InviteAddressButton.IsEnabled = false;
+        try
         {
-            var result = await node.InviteAsync(host, port, expectedDeviceId);
-            if (result.Outcome == InviteOutcome.Rejected)
-                AddActivity($"{result.PeerName} ha rifiutato" + (result.Reason is null ? "." : $": {result.Reason}."));
-        });
+            AddActivity($"Richiesta inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
+            await Run(async () =>
+            {
+                var result = await node.InviteAsync(host, port, expectedDeviceId);
+                if (result.Outcome == InviteOutcome.Rejected)
+                    AddActivity($"{result.PeerName} ha rifiutato" + (result.Reason is null ? "." : $": {result.Reason}."));
+            });
+        }
+        finally
+        {
+            InviteButton.IsEnabled = InviteAddressButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Esegue un'azione con il pulsante disattivato: niente secondo clic mentre è in corso.</summary>
+    private async Task RunFrom(Button button, Func<Task> action)
+    {
+        if (!button.IsEnabled)
+            return;
+        button.IsEnabled = false;
+        try
+        {
+            await Run(action);
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
     }
 
     private void RefreshSession()
@@ -266,13 +299,29 @@ public partial class MainWindow : Window
     {
         if (_model.Node is not { } node)
             return;
-        var selected = PeersList.SelectedIndex >= 0 && PeersList.SelectedIndex < _peers.Count ? _peers[PeersList.SelectedIndex].Address : null;
-        _peers.Clear();
-        _peers.AddRange(node.Peers);
-        PeersList.ItemsSource = _peers.Select(p => p.IsManual
+        var selected = PeersList.SelectedIndex >= 0 && PeersList.SelectedIndex < _peers.Count ? _peers[PeersList.SelectedIndex] : null;
+        var peers = node.Peers;
+        var lines = peers.Select(p => p.IsManual
             ? $"{p.Address} · a mano"
             : $"{p.DisplayName}{(p.UserName.Length > 0 ? $" ({p.UserName})" : "")} — {p.Address}" + (p.IsTrusted ? " · tuo PC" : "")).ToList();
-        PeersList.SelectedIndex = _peers.FindIndex(p => p.Address == selected);
+
+        // Lista invariata (il caso normale ogni 3 secondi): non si tocca, così selezione, scorrimento
+        // e focus restano dove sono.
+        if (PeersList.ItemsSource is List<string> current && current.SequenceEqual(lines) && _peers.SequenceEqual(peers))
+            return;
+
+        _refreshingPeers = true;
+        try
+        {
+            _peers.Clear();
+            _peers.AddRange(peers);
+            PeersList.ItemsSource = lines;
+            PeersList.SelectedIndex = selected is null ? -1 : _peers.FindIndex(p => p.Address == selected.Address && p.DeviceId == selected.DeviceId);
+        }
+        finally
+        {
+            _refreshingPeers = false;
+        }
     }
 
     // ================================================================ cronologia
@@ -283,13 +332,17 @@ public partial class MainWindow : Window
         UseHistoryButton.Click += async (_, _) =>
         {
             if (HistoryList.SelectedIndex is not (var i and >= 0) || i >= _history.Count)
+            {
+                _model.Notifier?.Info("Scegli una voce della cronologia, poi premi COPIA.");
                 return;
+            }
+
             // La voce si fissa prima dell'attesa: nel frattempo la lista può essere ricaricata.
             var entry = _history[i];
-            await Run(async () =>
+            await RunFrom(UseHistoryButton, async () =>
             {
                 await node.UseHistoryEntryAsync(entry);
-                AddActivity($"Copiato dalla cronologia: {Shorten(entry.Describe())}");
+                AddActivity($"Copiato dalla cronologia: {Describe(entry)}");
             });
         };
     }
@@ -303,8 +356,9 @@ public partial class MainWindow : Window
             var entries = await node.GetHistoryAsync();
             _history.Clear();
             _history.AddRange(entries);
+            // Le voci (nomi e testi) possono arrivare da altri PC: niente a capo né caratteri bidi.
             HistoryList.ItemsSource = _history.Select(h =>
-                $"#{h.Sequence,-3} {h.CreatedUtc.ToLocalTime():HH:mm:ss} {h.OriginName}: {Shorten(h.Describe())}").ToList();
+                $"#{h.Sequence,-3} {h.CreatedUtc.ToLocalTime():HH:mm:ss} {DisplayText.Sanitize(h.OriginName, 64)}: {Describe(h)}").ToList();
         });
     }
 
@@ -333,7 +387,7 @@ public partial class MainWindow : Window
             if (ParseAddress(PairAddressInput.Text) is not { } endpoint)
                 return;
             var code = PairCodeInput.Text ?? "";
-            await Run(async () =>
+            await RunFrom(PairButton, async () =>
             {
                 try
                 {
@@ -352,7 +406,7 @@ public partial class MainWindow : Window
             if (DevicesList.SelectedIndex is not (var i and >= 0) || i >= _devices.Count)
                 return;
             var device = _devices[i];
-            await Run(async () =>
+            await RunFrom(RevokeButton, async () =>
             {
                 if (await ConfirmDialog.ShowAsync(this, "Revoca dispositivo",
                         $"Revocare {device.DisplayName}? Non potrà più condividere la clipboard con i tuoi PC "
@@ -361,7 +415,7 @@ public partial class MainWindow : Window
                     await node.RevokeAsync(device.DeviceId);
             });
         };
-        RevokeSelfButton.Click += async (_, _) => await Run(async () =>
+        RevokeSelfButton.Click += async (_, _) => await RunFrom(RevokeSelfButton, async () =>
         {
             if (await ConfirmDialog.ShowAsync(this, "Revoca questo PC",
                     "Revocare questo PC? Gli altri tuoi PC smetteranno di fidarsi di lui e la revoca non si può annullare: "
@@ -414,7 +468,7 @@ public partial class MainWindow : Window
         var revoked = node.Trust.Entries
             .Where(e => e.Kind == TrustEntryKind.Pair && state.IsRevoked(e.SubjectId) && e.SubjectId != node.Identity.DeviceId)
             .GroupBy(e => e.SubjectId)
-            .Select(g => $"{g.Last().SubjectName} — REVOCATO");
+            .Select(g => $"{DisplayText.Sanitize(g.Last().SubjectName, 64)} — REVOCATO");
         DevicesList.ItemsSource = _devices.Select(d => $"{d.DisplayName} — {Core.Identity.DeviceIdentity.FormatFingerprint(d.SignPublicKey)}")
             .Concat(revoked)
             .ToList();
@@ -458,6 +512,7 @@ public partial class MainWindow : Window
             return;
 
         PageSimButton.IsVisible = true;
+        SimCurrentText.Text = simulation.DescribeCurrent();
         simulation.ContentChanged += () => Post(() => SimCurrentText.Text = simulation.DescribeCurrent());
         SimCopyTextButton.Click += (_, _) =>
         {
@@ -538,6 +593,9 @@ public partial class MainWindow : Window
         ActivityList.ItemsSource = items;
         LcdLast.Text = "» " + Shorten(line);
     }
+
+    /// <summary>Descrizione di una voce per le liste: testo ripulito (può arrivare da un altro PC) e accorciato.</summary>
+    private static string Describe(HistoryEntry entry) => Shorten(DisplayText.Sanitize(entry.Describe(), 200, "(vuota)"));
 
     private static string Shorten(string text)
     {

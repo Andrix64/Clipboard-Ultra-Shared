@@ -68,6 +68,9 @@ public static class PngCodec
         return width > 0 && height > 0;
     }
 
+    /// <summary>Rapporto massimo di compressione di deflate (circa 1032:1), con un po' di margine.</summary>
+    private const long MaxDeflateRatio = 1040;
+
     /// <param name="maxPixels">Oltre questo numero di pixel il PNG si rifiuta senza allocare nulla.</param>
     /// <exception cref="InvalidDataException">PNG malformato o troppo grande.</exception>
     /// <exception cref="NotSupportedException">Variante PNG non supportata (per esempio Adam7).</exception>
@@ -85,7 +88,8 @@ public static class PngCodec
         while (offset + 12 <= png.Length)
         {
             var length = BinaryPrimitives.ReadInt32BigEndian(png[offset..]);
-            if (length < 0 || offset + 12 + length > png.Length)
+            // Confronto senza somme: con length vicino a int.MaxValue la somma traboccherebbe.
+            if (length < 0 || length > png.Length - offset - 12)
                 throw new InvalidDataException("Chunk PNG troncato.");
             var type = Encoding.ASCII.GetString(png.Slice(offset + 4, 4));
             var data = png.Slice(offset + 8, length);
@@ -142,6 +146,11 @@ public static class PngCodec
         if (expected > Array.MaxLength)
             throw new InvalidDataException("PNG troppo grande.");
         var stride = (int)longStride;
+
+        // Deflate comprime al massimo circa 1032:1: se i dati compressi non possono bastare, si
+        // rifiuta prima di allocare il buffer (un PNG di pochi byte che dichiara 25 milioni di pixel).
+        if (expected > idat.Length * MaxDeflateRatio + 1024)
+            throw new InvalidDataException("Dati PNG insufficienti.");
 
         // Si decomprime al massimo quanto serve: i dati in più (una "bomba" di compressione) non
         // vengono mai letti.

@@ -147,7 +147,7 @@ public sealed class HardeningTests : IAsyncLifetime
             await connection.SendAsync(new SessionInviteReplyMessage(ConsentDecision.Accept, null));
             Assert.Equal(InviteOutcome.Accepted, (await invite).Outcome);
 
-            await connection.SendAsync(new ClipboardPushMessage("ITEM1",
+            await connection.SendAsync(new ClipboardPushMessage("0123456789ABCDEF01234567",
                 ClipboardContent.FromFiles([new ClipboardFileInfo("..\\..\\Start Menu\\Programs\\Startup\\x.bat", 10)])));
 
             CusMessage message;
@@ -157,13 +157,83 @@ public sealed class HardeningTests : IAsyncLifetime
             }
             while (message is not ClipboardAckMessage);
 
-            Assert.Equal("ITEM1", ((ClipboardAckMessage)message).ItemId);
+            Assert.Equal("0123456789ABCDEF01234567", ((ClipboardAckMessage)message).ItemId);
             Assert.Null(host.Clipboard.Current);
             Assert.Empty(await host.Node.GetHistoryAsync());
         }
         finally
         {
             listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task ReadOnlyMember_IgnoresItems_EvenFromAHostThatSendsThemAnyway()
+    {
+        var member = await Start("member");
+        member.Consent.Decision = ConsentDecision.AcceptReadOnly;
+        var evil = DeviceIdentity.Generate("evil", "u");
+
+        await using var connection = await PeerConnection.ConnectAsync("127.0.0.1", member.Node.Port, evil, 0, CancellationToken.None);
+        await connection.ReceiveAsync<TrustSyncMessage>(TimeSpan.FromSeconds(5));
+        await connection.SendAsync(new TrustSyncMessage([]));
+        await connection.SendAsync(new SessionInviteMessage("SESSIONE"));
+        var reply = await connection.ReceiveAsync<SessionInviteReplyMessage>(TimeSpan.FromSeconds(5));
+        Assert.Equal(ConsentDecision.AcceptReadOnly, reply.Decision);
+        await Eventually.TrueAsync(() => member.Node.Session is not null, "membro nella sessione");
+
+        // Un host che ignora la sola lettura manda comunque le copie.
+        await connection.SendAsync(new ClipboardItemMessage("0123456789ABCDEF01234567", 1, evil.DeviceId, "evil", ClipboardContent.FromText("dall'host")));
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        Assert.NotEqual("dall'host", member.Text);
+        Assert.NotNull(member.Node.Session);
+    }
+
+    [Fact]
+    public async Task PushReusingAnotherItemId_IsIgnored_ButAcknowledged()
+    {
+        var host = await Start("host");
+        var evil = DeviceIdentity.Generate("evil", "u");
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var invite = host.Node.InviteAsync("127.0.0.1", port);
+            using var client = await listener.AcceptTcpClientAsync();
+            await using var connection = await PeerConnection.AcceptAsync(client, evil, port, CancellationToken.None);
+            await connection.SendAsync(new TrustSyncMessage([]));
+            await connection.ReceiveAsync<TrustSyncMessage>(TimeSpan.FromSeconds(5));
+            await connection.ReceiveAsync<SessionInviteMessage>(TimeSpan.FromSeconds(5));
+            await connection.SendAsync(new SessionInviteReplyMessage(ConsentDecision.Accept, null));
+            Assert.Equal(InviteOutcome.Accepted, (await invite).Outcome);
+
+            host.Copy("dell'host");
+            var item = await ReceiveAsync<ClipboardItemMessage>(connection);
+
+            // Stesso identificativo, contenuto diverso: sostituirebbe la voce dell'host nella cronologia.
+            await connection.SendAsync(new ClipboardPushMessage(item.ItemId, ClipboardContent.FromText("contraffatta")));
+            var ack = await ReceiveAsync<ClipboardAckMessage>(connection);
+
+            Assert.Equal(item.ItemId, ack.ItemId);
+            Assert.Equal("dell'host", host.Text);
+            var history = await host.Node.GetHistoryAsync();
+            Assert.Equal("dell'host", Assert.Single(history, h => h.ItemId == item.ItemId).Content.Text);
+            Assert.DoesNotContain(history, h => h.Content.Text == "contraffatta");
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task<T> ReceiveAsync<T>(PeerConnection connection) where T : CusMessage
+    {
+        while (true)
+        {
+            if (await connection.ReceiveAsync(TimeSpan.FromSeconds(5)) is T message)
+                return message;
         }
     }
 

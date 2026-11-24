@@ -40,11 +40,21 @@ public sealed class Discovery : IAsyncDisposable
     public void Start()
     {
         var client = new UdpClient(AddressFamily.InterNetwork);
-        client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        client.Client.Bind(new IPEndPoint(IPAddress.Any, _port));
-        client.JoinMulticastGroup(Group);
-        client.MulticastLoopback = true;
-        client.Ttl = 1;
+        try
+        {
+            client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            client.Client.Bind(new IPEndPoint(IPAddress.Any, _port));
+            client.JoinMulticastGroup(Group);
+            client.MulticastLoopback = true;
+            client.Ttl = 1;
+        }
+        catch
+        {
+            // Nessuna scheda di rete, porta occupata: il socket non deve restare aperto.
+            client.Dispose();
+            throw;
+        }
+
         _client = client;
         _receiveLoop = Task.Run(ReceiveLoopAsync);
         _announceLoop = Task.Run(AnnounceLoopAsync);
@@ -132,6 +142,11 @@ public sealed class Discovery : IAsyncDisposable
             catch (Exception ex) when (ex is JsonException or SocketException)
             {
                 // Pacchetto estraneo o errore transitorio: si ignora.
+            }
+            catch (Exception ex)
+            {
+                // Un errore imprevisto (anche in chi ascolta l'evento) non deve fermare la scoperta.
+                System.Diagnostics.Trace.WriteLine($"CUS: errore nella scoperta: {ex}");
             }
         }
     }

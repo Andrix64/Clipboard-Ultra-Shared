@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Cus.Core.Abstractions;
 
 /// <summary>
@@ -11,6 +13,9 @@ public static class ClipboardFileNames
     public const int MaxFiles = 10_000;
 
     public const int MaxDepth = 32;
+
+    /// <summary>File più cartelle: ogni voce diventa un descrittore da 592 byte nella memoria globale.</summary>
+    public const int MaxEntries = 20_000;
 
     public const int MaxSegmentLength = 255;
 
@@ -73,6 +78,12 @@ public static class ClipboardFileNames
 
                 directories.Add(directory);
             }
+
+            if (filePaths.Count + directories.Count > MaxEntries)
+            {
+                reason = $"troppe voci tra file e cartelle (oltre {MaxEntries:N0})";
+                return false;
+            }
         }
 
         return true;
@@ -123,6 +134,11 @@ public static class ClipboardFileNames
         foreach (var c in segment)
         {
             if (char.IsControl(c) || c is '<' or '>' or ':' or '"' or '\\' or '|' or '?' or '*' or '/')
+                return false;
+
+            // Caratteri invisibili o di direzione (U+202E e simili): "fattura<RLO>txt.exe" in Esplora
+            // risorse sembrerebbe un .txt.
+            if (CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
                 return false;
         }
 

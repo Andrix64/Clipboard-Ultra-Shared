@@ -4,13 +4,13 @@
 
 ## Stato al 2026-11-24
 
-Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 123 su 123:
+Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 223 su 223 (dopo la seconda revisione):
 
 | Progetto di test | Test | Copre |
 |---|---|---|
-| `Cus.Core.Tests` | 86 | opzioni, profili, DB cifrato e migrazioni, PNG, CPace (test vector B.3), canale cifrato, lista di fiducia |
-| `Cus.IntegrationTests` | 23 | più nodi in loopback: sessioni, gruppi, sola lettura, convergenza, file lazy, cronologia, abbinamento, revoche, scoperta |
-| `Cus.Platform.Windows.Tests` | 14 | DPAPI, DIB, clipboard reale, contenuti sensibili, virtual files, incolla vero con Esplora risorse |
+| `Cus.Core.Tests` | 134 | opzioni, profili, DB cifrato e migrazioni, PNG, CPace (test vector B.3), canale cifrato, lista di fiducia, nomi dei file ricevuti |
+| `Cus.IntegrationTests` | 32 | più nodi in loopback: sessioni, gruppi, sola lettura, convergenza, file lazy, cronologia, abbinamento, revoche, scoperta, messaggi ostili |
+| `Cus.Platform.Windows.Tests` | 57 | DPAPI, DIB, clipboard reale, contenuti sensibili, virtual files, incolla vero con Esplora risorse |
 
 Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
 
@@ -45,6 +45,17 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
   - gli handler dei messaggi girano in un ciclo separato dalla lettura del socket: risposte e ping non aspettano più un handler lento;
   - **cronologia ai membri:** solo le voci della sessione in corso, e come anteprime (`HistoryEntry.Preview`); la voce completa si chiede all'host (`HistoryItemRequestMessage`) quando la si usa. L'host continua a vedere tutte le voci salvate;
   - abbinamento: chi inserisce il codice verifica la conferma dell'altro PC prima di mandare la propria.
+- **Seconda revisione (2026-11-24):**
+  - **revoche:** una voce nuova firmata da un dispositivo che questo PC sa già revocato si scarta, salvo la revoca di chi lo ha revocato (regola 4, revoca reciproca). Applica la regola 1 di IDEA.md: prima un dispositivo revocato poteva revocare tutti gli altri. Le date delle voci le sceglie chi firma, quindi fa fede ciò che il PC sapeva già al momento dell'unione. Conseguenza: due PC possono restare diversi solo se uno ha ricevuto la revoca del dispositivo dopo le sue voci e l'altro prima. Si scartano anche voci con tipo sconosciuto o nome oltre 256 caratteri (`Cus.Core/Trust/TrustLog.cs`);
+  - nomi dei file ricevuti: rifiutati anche i caratteri invisibili e di direzione (U+202E e simili) e gli elenchi oltre 20.000 voci tra file e cartelle;
+  - sola lettura applicata anche dal membro (le copie dell'host si ignorano) e, sull'host, niente cronologia né letture di file ai membri in sola lettura;
+  - `ItemId` delle copie: 24 cifre esadecimali, mai uno già usato (sostituirebbe la voce di un altro PC); l'host ricorda l'origine solo delle ultime 256 copie;
+  - connessioni in ingresso: chiuse anche quando la fase iniziale fallisce, al massimo 4 per indirizzo (loopback escluso), lista di fiducia da chi non è nel gruppo fino a 1 MB, primo messaggio fino a 64 KB e 10 s;
+  - l'host conferma sempre la copia di un membro, anche se il salvataggio fallisce; una sessione rimasta senza membri si chiude anche nella corsa invito/disconnessione; due inviti contemporanei allo stesso PC non si sovrascrivono;
+  - attività in sottofondo del nodo tracciate: errori registrati e arresto che le aspetta (al massimo 5 s) prima di chiudere il database;
+  - PNG: rifiutato prima di allocare se i dati compressi non bastano per le dimensioni dichiarate;
+  - librerie native cercate solo nella cartella dell'applicazione e in System32;
+  - UI: la lista dei peer non sovrascrive più ogni 3 s l'indirizzo di abbinamento, pulsanti disattivati durante inviti/abbinamenti/revoche, nomi e testi dalla rete ripuliti anche nella cronologia, notifiche impilate.
 
 ### Come provare a mano
 
