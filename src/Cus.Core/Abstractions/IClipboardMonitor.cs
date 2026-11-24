@@ -8,7 +8,13 @@ public interface IClipboardMonitor : IDisposable
     void Start();
 }
 
-public sealed class ClipboardChangedEventArgs(ClipboardContent content) : EventArgs
+public sealed class ClipboardChangedEventArgs(ClipboardContent content, bool isOwnWrite) : EventArgs
 {
     public ClipboardContent Content { get; } = content;
+
+    /// <summary>
+    /// True se il cambiamento è dovuto a una scrittura di CUS (contenuto ricevuto da un peer):
+    /// il nucleo non lo rimanda alla sessione, così non c'è rimbalzo.
+    /// </summary>
+    public bool IsOwnWrite { get; } = isOwnWrite;
 }

@@ -1,7 +1,14 @@
+using System.Diagnostics;
 using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Platform;
 using Cus.Core.Abstractions;
 using Cus.Core.Hosting;
+using Cus.Core.Node;
+using Cus.Core.Storage;
 using Cus.Platform.Simulated;
+using Cus.Platform.Windows;
 using Cus.UI;
 
 namespace Cus.App.Windows;
@@ -11,7 +18,7 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        var model = BuildModel(args);
+        var model = Compose(args);
 
         AppBuilder.Configure(() => new Cus.UI.App { Model = model })
             .UsePlatformDetect()
@@ -23,10 +30,9 @@ internal static class Program
     }
 
     /// <summary>
-    /// Composition root: sceglie le implementazioni in base alle opzioni. È l'unico punto in cui
-    /// si decide tra servizi Windows reali e simulati.
+    /// Composition root: l'unico punto in cui si scelgono le implementazioni (Windows reali o simulate).
     /// </summary>
-    private static MainWindowModel BuildModel(string[] args)
+    private static MainWindowModel Compose(string[] args)
     {
         CusOptions options;
         try
@@ -35,40 +41,120 @@ internal static class Program
         }
         catch (ArgumentException ex)
         {
-            return new MainWindowModel { Title = "CUS — errore", InfoLines = [ex.Message] };
+            return Failed("CUS — errore", ex.Message);
         }
+
+        // Un profilo per volta: due istanze sullo stesso DB si contenderebbero identità e porta.
+        var mutex = new Mutex(initiallyOwned: true, $@"Local\CUS-profile-{options.Profile}", out var createdNew);
+        if (!createdNew)
+            return Failed("CUS — errore", $"Il profilo '{options.Profile}' è già aperto in un'altra finestra di CUS.");
 
         var paths = new ProfileAppPaths(options.Profile);
         var info = new List<string>
         {
             $"Profilo: {options.Profile}",
             $"Cartella dati: {paths.DataDirectory}",
-            $"Porta: {options.Port?.ToString() ?? $"prima libera tra {NetworkDefaults.DefaultPort} e {NetworkDefaults.PortRangeEnd}"}",
             $"Clipboard: {(options.ClipboardMode == ClipboardMode.Simulated ? "simulata" : "di sistema")}",
-            $"Peer manuali: {(options.Peers.Count == 0 ? "nessuno" : string.Join(", ", options.Peers))}",
+            $"Ascolto su: {options.BindAddress}",
+            $"Scoperta automatica: {(options.EnableDiscovery ? "attiva" : "disattivata")}",
         };
 
-        IClipboardMonitor? monitor = null;
-        Action<string>? simulateCopy = null;
+        CusDatabase database;
+        try
+        {
+            database = CusDatabase.Open(paths, new DpapiSecretStore(paths.DataDirectory));
+        }
+        catch (Exception ex)
+        {
+            mutex.ReleaseMutex();
+            return Failed("CUS — errore", $"Impossibile aprire il database cifrato del profilo: {ex.Message}");
+        }
 
+        var defaultName = options.Profile == CusOptions.DefaultProfile ? Environment.MachineName : $"{Environment.MachineName} ({options.Profile})";
+        var identity = CusNode.LoadOrCreateIdentity(database, options.DisplayName ?? defaultName, Environment.UserName);
+        if (options.DisplayName is { } name && name != identity.DisplayName)
+        {
+            identity = identity.WithDisplayName(name);
+            database.SaveIdentity(identity);
+        }
+
+        Func<Screens?> screens = () =>
+            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow?.Screens;
+
+        IClipboardMonitor monitor;
+        IClipboardWriter writer;
+        IOverlayIndicator overlay;
+        ISimulationControls? simulation = null;
         if (options.ClipboardMode == ClipboardMode.Simulated)
         {
-            var clipboard = new SimulatedClipboard();
-            monitor = clipboard;
-            simulateCopy = text => clipboard.Copy(ClipboardContent.FromText(text));
+            // Più istanze sullo stesso PC: clipboard virtuale e indicatore solo nella finestra,
+            // per non sovrapporre gli indicatori reali di istanze diverse.
+            var simulated = new SimulatedClipboard();
+            (monitor, writer, overlay) = (simulated, simulated, new RecordingOverlayIndicator());
+            simulation = new SimulationControls(simulated);
         }
         else
         {
-            // La clipboard Windows reale arriva in fase 1 (PLAN.md).
-            info.Add("La clipboard di sistema non è ancora implementata: avvia con --clipboard simulated.");
+            var windows = new WindowsClipboard();
+            (monitor, writer) = (windows, windows);
+            overlay = new AvaloniaOverlayIndicator(screens, NativeWindowStyle.MakeNonActivating);
         }
+
+        var notifier = new AvaloniaNotifier(screens, $"CUS — {identity.DisplayName}", NativeWindowStyle.MakeNonActivating);
+        var node = new CusNode(
+            new CusNodeOptions
+            {
+                Port = options.Port,
+                BindAddress = options.BindAddress,
+                EnableDiscovery = options.EnableDiscovery,
+                ManualPeers = options.Peers,
+            },
+            database, identity, monitor, writer, overlay, new AvaloniaConsentPrompt(), notifier);
+
+        async Task Shutdown()
+        {
+            await node.DisposeAsync();
+            monitor.Dispose();
+            overlay.Dispose();
+            database.Dispose();
+        }
+
+        try
+        {
+            node.StartAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Shutdown().GetAwaiter().GetResult();
+            mutex.ReleaseMutex();
+            return Failed($"CUS — {options.Profile}", $"Avvio non riuscito: {ex.Message}");
+        }
+
+        info.Add($"Porta TCP: {node.Port}");
 
         return new MainWindowModel
         {
-            Title = $"CUS — {options.Profile}",
+            Title = $"CUS — {identity.DisplayName}",
             InfoLines = info,
-            Clipboard = monitor,
-            SimulateCopy = simulateCopy,
+            Node = node,
+            Notifier = notifier,
+            Simulation = simulation,
+            Shutdown = Shutdown,
+            ResetIdentityAndRestart = () =>
+            {
+                Shutdown().GetAwaiter().GetResult();
+                using (var db = CusDatabase.Open(paths, new DpapiSecretStore(paths.DataDirectory)))
+                    CusNode.ResetIdentity(db);
+                mutex.ReleaseMutex();
+                Process.Start(new ProcessStartInfo(Environment.ProcessPath!, args) { UseShellExecute = false });
+                (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+            },
         };
     }
+
+    private static MainWindowModel Failed(string title, string error) => new()
+    {
+        Title = title,
+        StartupError = error + Environment.NewLine + Environment.NewLine + CusOptions.Usage,
+    };
 }

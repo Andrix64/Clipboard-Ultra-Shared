@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Cus.Core.Abstractions;
 
 /// <summary>Tipo di contenuto della clipboard gestito da CUS.</summary>
@@ -8,8 +10,16 @@ public enum ClipboardContentKind
     Files,
 }
 
-/// <summary>Metadati di un file copiato. Il contenuto si trasferisce in modo lazy, solo all'incolla.</summary>
-public sealed record ClipboardFileInfo(string Name, long SizeBytes);
+/// <summary>
+/// Metadati di un file copiato. Il contenuto si trasferisce in modo lazy, solo all'incolla.
+/// <see cref="Name"/> è un percorso relativo con '/' come separatore (per esempio "cartella/a.txt").
+/// </summary>
+public sealed record ClipboardFileInfo(string Name, long SizeBytes)
+{
+    /// <summary>Percorso locale sul PC d'origine. Non viaggia mai in rete.</summary>
+    [JsonIgnore]
+    public string? LocalPath { get; init; }
+}
 
 /// <summary>
 /// Istantanea indipendente dalla piattaforma di ciò che è nella clipboard.
@@ -29,6 +39,7 @@ public sealed record ClipboardContent
     /// True se un password manager ha marcato il contenuto come sensibile. Lo rileva
     /// l'implementazione di piattaforma; il nucleo garantisce che questi contenuti non lascino il PC.
     /// </summary>
+    [JsonIgnore]
     public bool IsMarkedSensitive { get; init; }
 
     public static ClipboardContent FromText(string text, bool isMarkedSensitive = false) => new()
@@ -36,5 +47,28 @@ public sealed record ClipboardContent
         Kind = ClipboardContentKind.Text,
         Text = text ?? throw new ArgumentNullException(nameof(text)),
         IsMarkedSensitive = isMarkedSensitive,
+    };
+
+    public static ClipboardContent FromImage(byte[] png) => new()
+    {
+        Kind = ClipboardContentKind.Image,
+        ImagePng = png ?? throw new ArgumentNullException(nameof(png)),
+    };
+
+    public static ClipboardContent FromFiles(IReadOnlyList<ClipboardFileInfo> files) => new()
+    {
+        Kind = ClipboardContentKind.Files,
+        Files = files ?? throw new ArgumentNullException(nameof(files)),
+    };
+
+    /// <summary>Descrizione breve per UI e cronologia.</summary>
+    public string Describe() => Kind switch
+    {
+        ClipboardContentKind.Text when IsMarkedSensitive => "(testo sensibile, non condiviso)",
+        ClipboardContentKind.Text => Text ?? "",
+        ClipboardContentKind.Image => $"(immagine, {ImagePng?.Length ?? 0:N0} byte)",
+        ClipboardContentKind.Files when Files is { Count: 1 } => $"(file: {Files[0].Name}, {Files[0].SizeBytes:N0} byte)",
+        ClipboardContentKind.Files => $"({Files?.Count ?? 0} file, {Files?.Sum(f => f.SizeBytes) ?? 0:N0} byte)",
+        _ => "(contenuto sconosciuto)",
     };
 }

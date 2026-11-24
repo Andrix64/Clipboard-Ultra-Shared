@@ -1,10 +1,10 @@
-using Cus.Core.Abstractions;
+using Cus.Core.Node;
 
 namespace Cus.UI;
 
 /// <summary>
 /// Ciò che la finestra principale riceve dal progetto eseguibile. La UI non conosce le
-/// implementazioni di piattaforma: vede solo le interfacce di Cus.Core.
+/// implementazioni di piattaforma: vede il nodo e le interfacce di Cus.Core.
 /// </summary>
 public sealed record MainWindowModel
 {
@@ -12,12 +12,37 @@ public sealed record MainWindowModel
 
     public required string Title { get; init; }
 
-    /// <summary>Righe informative (profilo, cartella dati, porta, peer) o messaggi di errore.</summary>
+    /// <summary>Righe informative (profilo, cartella dati, porta).</summary>
     public IReadOnlyList<string> InfoLines { get; init; } = [];
 
-    /// <summary>Monitor della clipboard da mostrare. Null se non disponibile.</summary>
-    public IClipboardMonitor? Clipboard { get; init; }
+    /// <summary>Null se l'avvio è fallito: la finestra mostra solo <see cref="StartupError"/>.</summary>
+    public CusNode? Node { get; init; }
 
-    /// <summary>Presente solo con clipboard simulata: simula una copia dell'utente.</summary>
-    public Action<string>? SimulateCopy { get; init; }
+    public string? StartupError { get; init; }
+
+    public AvaloniaNotifier? Notifier { get; init; }
+
+    /// <summary>Presente solo con clipboard simulata.</summary>
+    public ISimulationControls? Simulation { get; init; }
+
+    /// <summary>Genera una nuova identità e riavvia l'applicazione (dispositivo revocato).</summary>
+    public Action? ResetIdentityAndRestart { get; init; }
+
+    /// <summary>Chiamato alla chiusura della finestra principale, per fermare nodo e piattaforma.</summary>
+    public Func<Task>? Shutdown { get; init; }
+}
+
+/// <summary>Comandi della clipboard simulata, per provare CUS con più istanze sullo stesso PC.</summary>
+public interface ISimulationControls
+{
+    event Action? ContentChanged;
+
+    string DescribeCurrent();
+
+    void CopyText(string text);
+
+    void CopyPaths(IReadOnlyList<string> paths);
+
+    /// <summary>Come incollare in Esplora risorse: scarica i file ricevuti nella cartella.</summary>
+    Task<IReadOnlyList<string>> PasteFilesAsync(string folder);
 }

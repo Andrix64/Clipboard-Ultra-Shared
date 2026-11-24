@@ -1,0 +1,180 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:Cus.UI">
+
+  <!-- Etichette incise sul telaio -->
+  <Style Selector="TextBlock.engraved">
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="LetterSpacing" Value="1.5" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.EngravingBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.lcd">
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+  </Style>
+
+  <Style Selector="TextBlock.lcd-dark">
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+
+  <!-- Telaio e display -->
+  <Style Selector="Border.chassis">
+    <Setter Property="Background" Value="{x:Static ui:Skin.ChassisBrush}" />
+    <Setter Property="BorderBrush" Value="{x:Static ui:Skin.ChassisEdgeBrush}" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="CornerRadius" Value="18" />
+    <Setter Property="BoxShadow" Value="0 6 18 0 #AA000000" />
+  </Style>
+
+  <Style Selector="Border.lcd">
+    <Setter Property="Background" Value="{x:Static ui:Skin.LcdBrush}" />
+    <Setter Property="BorderBrush" Value="#0C1505" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="CornerRadius" Value="10" />
+    <Setter Property="BoxShadow" Value="inset 0 2 8 0 #77000000" />
+  </Style>
+
+  <Style Selector="Border.lcd-dark">
+    <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
+    <Setter Property="BorderBrush" Value="#0C1505" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="BoxShadow" Value="inset 0 2 6 0 #99000000" />
+  </Style>
+
+  <!-- Pulsanti tondi lucidi -->
+  <Style Selector="Button.round">
+    <Setter Property="Width" Value="64" />
+    <Setter Property="Height" Value="64" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Panel>
+          <Ellipse Fill="#1B1D20" Margin="-4" />
+          <Ellipse x:Name="Body" Fill="{x:Static ui:Skin.LimeGlossBrush}" Stroke="#0E1A04" StrokeThickness="2" />
+          <Ellipse Fill="{x:Static ui:Skin.HighlightBrush}" Margin="10,5,10,30" IsHitTestVisible="False" />
+          <ContentPresenter x:Name="PART_ContentPresenter"
+                            Content="{TemplateBinding Content}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Foreground="{TemplateBinding Foreground}" />
+        </Panel>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="Button.round.small">
+    <Setter Property="Width" Value="22" />
+    <Setter Property="Height" Value="22" />
+    <Setter Property="FontSize" Value="11" />
+  </Style>
+  <Style Selector="Button.round.small /template/ Ellipse">
+    <Setter Property="Margin" Value="0" />
+  </Style>
+  <Style Selector="Button.round:pointerover /template/ Ellipse#Body">
+    <Setter Property="Fill" Value="{x:Static ui:Skin.LimeGlossHoverBrush}" />
+  </Style>
+  <Style Selector="Button.round:pressed">
+    <Setter Property="RenderTransform" Value="scale(0.94)" />
+  </Style>
+  <Style Selector="Button.round:disabled">
+    <Setter Property="Opacity" Value="0.45" />
+  </Style>
+
+  <!-- Pulsanti a pastiglia -->
+  <Style Selector="Button.pill">
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="Body" Background="{x:Static ui:Skin.PillBrush}" BorderBrush="#0E1A04" BorderThickness="1.5"
+                CornerRadius="5" Padding="10,4" BoxShadow="0 1 2 0 #88000000">
+          <ContentPresenter x:Name="PART_ContentPresenter" Content="{TemplateBinding Content}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Foreground="{TemplateBinding Foreground}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="Button.pill:pointerover /template/ Border#Body">
+    <Setter Property="Background" Value="{x:Static ui:Skin.LimeGlossHoverBrush}" />
+  </Style>
+  <Style Selector="Button.pill:pressed">
+    <Setter Property="RenderTransform" Value="scale(0.96)" />
+  </Style>
+  <!-- Selettore di pagina: spento finché non è attivo -->
+  <Style Selector="Button.pill.page /template/ Border#Body">
+    <Setter Property="Background" Value="{x:Static ui:Skin.PillOffBrush}" />
+    <Setter Property="Padding" Value="8,4" />
+  </Style>
+  <Style Selector="Button.pill.page">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.EngravingBrush}" />
+  </Style>
+  <Style Selector="Button.pill.page.active /template/ Border#Body">
+    <Setter Property="Background" Value="{x:Static ui:Skin.PillBrush}" />
+  </Style>
+  <Style Selector="Button.pill.page.active">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+  </Style>
+
+  <!-- Liste e campi in stile LCD spento -->
+  <Style Selector="ListBox.lcd">
+    <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
+    <Setter Property="BorderBrush" Value="#0C1505" />
+    <Setter Property="BorderThickness" Value="2" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="FontSize" Value="12" />
+  </Style>
+  <Style Selector="ListBox.lcd ListBoxItem">
+    <Setter Property="Padding" Value="8,3" />
+    <Setter Property="MinHeight" Value="22" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+  </Style>
+  <Style Selector="ListBox.lcd ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#2A4A10" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+  </Style>
+  <Style Selector="ListBox.lcd ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{x:Static ui:Skin.LimeTextBrush}" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+  </Style>
+  <Style Selector="ListBox.lcd ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="#B8FF4A" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+  </Style>
+
+  <Style Selector="TextBox.lcd">
+    <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+    <Setter Property="CaretBrush" Value="{x:Static ui:Skin.LimeTextBrush}" />
+    <Setter Property="SelectionBrush" Value="#5FA20E" />
+    <Setter Property="BorderBrush" Value="#0C1505" />
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="CornerRadius" Value="5" />
+    <Setter Property="MinHeight" Value="28" />
+  </Style>
+  <Style Selector="TextBox.lcd:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
+    <Setter Property="BorderBrush" Value="#5FA20E" />
+  </Style>
+  <Style Selector="TextBox.lcd:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
+    <Setter Property="BorderBrush" Value="{x:Static ui:Skin.LimeTextBrush}" />
+  </Style>
+  <Style Selector="TextBox.lcd:pointerover, TextBox.lcd:focus">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.LimeTextBrush}" />
+  </Style>
+  <Style Selector="TextBox.lcd /template/ TextBlock#PART_Watermark, TextBox.lcd /template/ TextBlock#PART_PlaceholderText">
+    <Setter Property="Foreground" Value="#4E7A1E" />
+  </Style>
+</Styles>

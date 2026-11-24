@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.RegularExpressions;
 
 namespace Cus.Core.Hosting;
@@ -84,7 +85,8 @@ public sealed partial record CusOptions
     public const string DefaultProfile = "default";
 
     public const string Usage =
-        "Uso: cus [--profile <nome>] [--port <porta>] [--clipboard real|simulated] [--peer <host[:porta]>]...";
+        "Uso: cus [--profile <nome>] [--name <nome del PC>] [--port <porta>] [--bind <ip>] [--clipboard real|simulated] "
+        + "[--peer <host[:porta]>]... [--no-discovery]";
 
     public string Profile { get; init; } = DefaultProfile;
 
@@ -94,6 +96,14 @@ public sealed partial record CusOptions
     public ClipboardMode ClipboardMode { get; init; } = ClipboardMode.Real;
 
     public IReadOnlyList<PeerEndpoint> Peers { get; init; } = [];
+
+    /// <summary>Nome del dispositivo mostrato agli altri. Null: nome del PC (più il profilo, se non è quello di default).</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>Indirizzo di ascolto. 127.0.0.1 evita l'avviso del firewall nelle prove su un solo PC.</summary>
+    public IPAddress BindAddress { get; init; } = IPAddress.Any;
+
+    public bool EnableDiscovery { get; init; } = true;
 
     /// <exception cref="ArgumentException">Argomento sconosciuto o valore non valido.</exception>
     public static CusOptions Parse(IReadOnlyList<string> args)
@@ -119,6 +129,21 @@ public sealed partial record CusOptions
                     break;
                 case "--peer":
                     peers.Add(PeerEndpoint.Parse(ValueOf(args, ref i, name)));
+                    break;
+                case "--name":
+                    var displayName = ValueOf(args, ref i, name).Trim();
+                    if (displayName.Length is 0 or > 64)
+                        throw new ArgumentException("Il nome del PC deve avere da 1 a 64 caratteri.");
+                    options = options with { DisplayName = displayName };
+                    break;
+                case "--bind":
+                    var bind = ValueOf(args, ref i, name);
+                    if (!IPAddress.TryParse(bind, out var address))
+                        throw new ArgumentException($"Indirizzo di --bind non valido: '{bind}'.");
+                    options = options with { BindAddress = address };
+                    break;
+                case "--no-discovery":
+                    options = options with { EnableDiscovery = false };
                     break;
                 default:
                     throw new ArgumentException($"Argomento sconosciuto: '{name}'. {Usage}");

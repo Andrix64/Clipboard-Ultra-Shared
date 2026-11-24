@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test delle implementazioni Windows. Toccano la clipboard di sistema: girano in serie
+       (vedi xunit.runner.json) e richiedono una sessione desktop interattiva. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>Cus.Platform.Windows.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cus.Platform.Windows\Cus.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Cus.Platform.Simulated\Cus.Platform.Simulated.csproj" />
+  </ItemGroup>
+
+</Project>

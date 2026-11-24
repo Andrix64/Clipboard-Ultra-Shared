@@ -8,6 +8,8 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Cus.Core.Tests/Cus.Core.Tests.csproj" />
+    <Project Path="tests/Cus.IntegrationTests/Cus.IntegrationTests.csproj" />
+    <Project Path="tests/Cus.Platform.Windows.Tests/Cus.Platform.Windows.Tests.csproj" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path="Directory.Build.props" />

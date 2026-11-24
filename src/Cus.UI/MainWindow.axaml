@@ -1,22 +1,160 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:Cus.UI"
         x:Class="Cus.UI.MainWindow"
-        Width="520" Height="420"
+        Width="920" Height="460" CanResize="False"
+        WindowDecorations="None"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
         Title="CUS">
-  <DockPanel Margin="16">
-    <TextBlock x:Name="InfoText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12" />
+  <Grid Margin="14">
 
-    <StackPanel x:Name="SimulatedPanel" DockPanel.Dock="Top" Spacing="8" IsVisible="False">
-      <TextBlock Text="Clipboard simulata di questa istanza" FontWeight="SemiBold" />
+    <!-- Pannello laterale, infilato dietro al corpo principale -->
+    <Border x:Name="Side" Classes="chassis" CornerRadius="12" Width="496" Height="372"
+            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="392,30,0,0" Padding="22,12,12,12">
       <DockPanel>
-        <Button x:Name="CopyButton" DockPanel.Dock="Right" Content="Copia" Margin="8,0,0,0" />
-        <TextBox x:Name="CopyInput" PlaceholderText="Testo da copiare" />
-      </DockPanel>
-    </StackPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+          <TextBlock DockPanel.Dock="Right" Classes="engraved" Text="CONTROLLO SESSIONE" VerticalAlignment="Center" />
+          <TextBlock Text="CUS" FontSize="15" FontWeight="Black" FontStyle="Italic" Foreground="{x:Static ui:Skin.EngravingBrush}" />
+        </DockPanel>
+        <WrapPanel DockPanel.Dock="Top" Orientation="Horizontal">
+          <Button x:Name="PagePeersButton" Classes="pill page" Content="PEER" Margin="0,0,5,0" />
+          <Button x:Name="PageHistoryButton" Classes="pill page" Content="CRONOLOGIA" Margin="0,0,5,0" />
+          <Button x:Name="PageDevicesButton" Classes="pill page" Content="DISPOSITIVI" Margin="0,0,5,0" />
+          <Button x:Name="PageSimButton" Classes="pill page" Content="SIM" Margin="0,0,5,0" IsVisible="False" />
+          <Button x:Name="PageActivityButton" Classes="pill page" Content="ATTIVITÀ" Margin="0,0,5,0" />
+          <Button x:Name="PageInfoButton" Classes="pill page" Content="INFO" />
+        </WrapPanel>
 
-    <StackPanel Spacing="4" Margin="0,12,0,0">
-      <TextBlock Text="Contenuto attuale della clipboard" FontWeight="SemiBold" />
-      <TextBlock x:Name="CurrentText" TextWrapping="Wrap" Text="(vuota)" />
-    </StackPanel>
-  </DockPanel>
+        <Border Classes="lcd-dark" Margin="0,10,0,0" Padding="8">
+          <Panel x:Name="Pages">
+
+            <DockPanel x:Name="PeersPage">
+              <TextBlock DockPanel.Dock="Top" Classes="engraved" Text="DISPOSITIVI IN RETE" Margin="0,0,0,6" />
+              <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                <Button x:Name="AddPeerButton" DockPanel.Dock="Right" Classes="pill" Content="AGGIUNGI" Margin="6,0,0,0" />
+                <Button x:Name="InviteAddressButton" DockPanel.Dock="Right" Classes="pill" Content="RICHIEDI" Margin="6,0,0,0" />
+                <TextBox x:Name="AddressInput" Classes="lcd" PlaceholderText="IP o nome host, porta opzionale" />
+              </DockPanel>
+              <StackPanel DockPanel.Dock="Right" Spacing="6" Margin="8,0,0,0">
+                <Button x:Name="RemovePeerButton" Classes="pill" Content="RIMUOVI" />
+              </StackPanel>
+              <ListBox x:Name="PeersList" Classes="lcd" />
+            </DockPanel>
+
+            <DockPanel x:Name="HistoryPage" IsVisible="False">
+              <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+                  <Button x:Name="RefreshHistoryButton" Classes="pill" Content="AGGIORNA" />
+                  <Button x:Name="UseHistoryButton" Classes="pill" Content="COPIA" />
+                </StackPanel>
+                <TextBlock Classes="engraved" Text="ULTIME 20 COPIE (SUL PC DELL'HOST)" VerticalAlignment="Center" />
+              </DockPanel>
+              <ListBox x:Name="HistoryList" Classes="lcd" />
+            </DockPanel>
+
+            <ScrollViewer x:Name="DevicesPage" IsVisible="False">
+              <StackPanel Spacing="8" Margin="0,0,6,0">
+                <TextBlock x:Name="IdentityText" Classes="lcd-dark" TextWrapping="Wrap" />
+                <Border x:Name="RevokedPanel" IsVisible="False" Background="#40FF5A3C" BorderBrush="{x:Static ui:Skin.AlertBrush}"
+                        BorderThickness="1" CornerRadius="5" Padding="8">
+                  <StackPanel Spacing="6">
+                    <TextBlock Classes="lcd-dark" Foreground="{x:Static ui:Skin.AlertBrush}" TextWrapping="Wrap"
+                               Text="QUESTO PC È STATO REVOCATO. PER RIABBINARLO SERVE UNA NUOVA IDENTITÀ." />
+                    <Button x:Name="ResetIdentityButton" Classes="pill" Content="NUOVA IDENTITÀ E RIAVVIA" HorizontalAlignment="Left" />
+                  </StackPanel>
+                </Border>
+                <TextBlock Classes="engraved" Text="ABBINA A UN PC CHE MOSTRA IL CODICE" />
+                <DockPanel>
+                  <Button x:Name="PairButton" DockPanel.Dock="Right" Classes="pill" Content="ABBINA" Margin="6,0,0,0" />
+                  <TextBox x:Name="PairCodeInput" DockPanel.Dock="Right" Classes="lcd" Width="90" PlaceholderText="CODICE" Margin="6,0,0,0" />
+                  <TextBox x:Name="PairAddressInput" Classes="lcd" PlaceholderText="Indirizzo (o scegli un peer)" />
+                </DockPanel>
+                <TextBlock x:Name="CodeText" Classes="lcd-dark" FontSize="16" />
+                <TextBlock Classes="engraved" Text="PC ABBINATI" />
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Right" Spacing="6" Margin="8,0,0,0">
+                    <Button x:Name="RevokeButton" Classes="pill" Content="REVOCA" HorizontalAlignment="Stretch" />
+                    <Button x:Name="RevokeSelfButton" Classes="pill" Content="REVOCA QUESTO PC" HorizontalAlignment="Stretch" />
+                  </StackPanel>
+                  <ListBox x:Name="DevicesList" Classes="lcd" Height="96" />
+                </DockPanel>
+                <TextBlock x:Name="PairedByText" Classes="lcd-dark" TextWrapping="Wrap" />
+              </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel x:Name="SimPage" IsVisible="False" Spacing="8">
+              <TextBlock Classes="lcd-dark" TextWrapping="Wrap"
+                         Text="CLIPBOARD VIRTUALE: PER PROVARE PIÙ ISTANZE SULLO STESSO PC." />
+              <DockPanel>
+                <Button x:Name="SimCopyTextButton" DockPanel.Dock="Right" Classes="pill" Content="COPIA TESTO" Margin="6,0,0,0" />
+                <TextBox x:Name="SimTextInput" Classes="lcd" PlaceholderText="Testo da copiare" />
+              </DockPanel>
+              <WrapPanel>
+                <Button x:Name="SimCopyFilesButton" Classes="pill" Content="COPIA FILE" Margin="0,0,6,6" />
+                <Button x:Name="SimCopyFolderButton" Classes="pill" Content="COPIA CARTELLA" Margin="0,0,6,6" />
+                <Button x:Name="SimPasteFilesButton" Classes="pill" Content="INCOLLA FILE IN..." Margin="0,0,6,6" />
+              </WrapPanel>
+              <TextBlock Classes="engraved" Text="CONTENUTO ATTUALE" />
+              <TextBlock x:Name="SimCurrentText" Classes="lcd-dark" TextWrapping="Wrap" Text="(vuota)" />
+            </StackPanel>
+
+            <ListBox x:Name="ActivityList" Classes="lcd" IsVisible="False" />
+
+            <ScrollViewer x:Name="InfoPage" IsVisible="False">
+              <TextBlock x:Name="InfoText" Classes="lcd-dark" TextWrapping="Wrap" />
+            </ScrollViewer>
+          </Panel>
+        </Border>
+      </DockPanel>
+    </Border>
+
+    <!-- Corpo principale -->
+    <Border x:Name="Deck" Classes="chassis" Width="404" Height="420" HorizontalAlignment="Left" VerticalAlignment="Top" Padding="16,12,16,16">
+      <DockPanel>
+        <DockPanel x:Name="DragBar" DockPanel.Dock="Top" Background="Transparent" Height="28">
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+            <Button x:Name="MinimizeButton" AutomationProperties.Name="Riduci" Classes="round small" Content="–" ToolTip.Tip="Riduci a icona" />
+            <Button x:Name="CloseButton" AutomationProperties.Name="Chiudi" Classes="round small" Content="×" ToolTip.Tip="Chiudi CUS" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <TextBlock Text="CUS" FontSize="22" FontWeight="Black" FontStyle="Italic" Foreground="{x:Static ui:Skin.LimeTextBrush}" />
+            <TextBlock Classes="engraved" Text="CLIPBOARD · ULTRA · SHARED" VerticalAlignment="Center" />
+          </StackPanel>
+        </DockPanel>
+
+        <Border x:Name="LcdPanel" Classes="lcd" DockPanel.Dock="Top" Margin="0,10,0,0" Height="178" Padding="14,10">
+          <Grid RowDefinitions="Auto,*,Auto,Auto,Auto">
+            <DockPanel>
+              <TextBlock x:Name="LcdPort" DockPanel.Dock="Right" Classes="lcd" FontSize="11" />
+              <TextBlock x:Name="LcdDevice" Classes="lcd" FontSize="11" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+            <TextBlock x:Name="LcdState" Grid.Row="1" Classes="lcd" FontSize="32" FontWeight="Bold" VerticalAlignment="Center" Text="IN ATTESA" />
+            <TextBlock x:Name="LcdParticipants" Grid.Row="2" Classes="lcd" FontSize="12" TextTrimming="CharacterEllipsis" />
+            <TextBlock x:Name="LcdLast" Grid.Row="3" Classes="lcd" FontSize="12" TextTrimming="CharacterEllipsis" />
+            <TextBlock x:Name="LcdCode" Grid.Row="4" Classes="lcd" FontSize="12" FontWeight="Bold" />
+          </Grid>
+        </Border>
+
+        <Border x:Name="StartupErrorPanel" DockPanel.Dock="Top" IsVisible="False" Classes="lcd-dark" Margin="0,8,0,0" Padding="10">
+          <TextBlock x:Name="StartupErrorText" Classes="lcd-dark" Foreground="{x:Static ui:Skin.AlertBrush}" TextWrapping="Wrap" />
+        </Border>
+
+        <StackPanel x:Name="Controls" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="30">
+          <StackPanel Spacing="10">
+            <Button x:Name="InviteButton" AutomationProperties.Name="Invita" Classes="round" Content="▶" FontSize="20" ToolTip.Tip="Richiedi accesso al peer selezionato" />
+            <TextBlock Classes="engraved" Text="INVITA" HorizontalAlignment="Center" />
+          </StackPanel>
+          <StackPanel Spacing="10">
+            <Button x:Name="LeaveButton" AutomationProperties.Name="Esci" Classes="round" Content="■" FontSize="18" ToolTip.Tip="Esci dalla sessione" />
+            <TextBlock x:Name="LeaveLabel" Classes="engraved" Text="ESCI" HorizontalAlignment="Center" />
+          </StackPanel>
+          <StackPanel Spacing="10">
+            <Button x:Name="ShowCodeButton" AutomationProperties.Name="Codice" Classes="round" Content="#" FontSize="20" ToolTip.Tip="Mostra il codice di abbinamento" />
+            <TextBlock Classes="engraved" Text="CODICE" HorizontalAlignment="Center" />
+          </StackPanel>
+        </StackPanel>
+      </DockPanel>
+    </Border>
+  </Grid>
 </Window>

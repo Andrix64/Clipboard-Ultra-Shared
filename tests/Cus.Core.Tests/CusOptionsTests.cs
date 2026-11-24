@@ -29,6 +29,17 @@ public class CusOptionsTests
             options.Peers);
     }
 
+    [Fact]
+    public void Parse_ReadsNameBindAndDiscovery()
+    {
+        var options = CusOptions.Parse(["--name", "Portatile di Andrea", "--bind", "127.0.0.1", "--no-discovery"]);
+
+        Assert.Equal("Portatile di Andrea", options.DisplayName);
+        Assert.Equal(System.Net.IPAddress.Loopback, options.BindAddress);
+        Assert.False(options.EnableDiscovery);
+        Assert.True(CusOptions.Parse([]).EnableDiscovery);
+    }
+
     [Theory]
     [InlineData("--unknown")]
     [InlineData("--profile")]
@@ -37,6 +48,8 @@ public class CusOptionsTests
     [InlineData("--port", "65536")]
     [InlineData("--port", "-1")]
     [InlineData("--clipboard", "fake")]
+    [InlineData("--bind", "non-un-ip")]
+    [InlineData("--name", "")]
     public void Parse_RejectsInvalidArguments(params string[] args)
     {
         Assert.Throws<ArgumentException>(() => CusOptions.Parse(args));

@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Worktree temporanei degli agenti Claude Code
+.claude/worktrees/
