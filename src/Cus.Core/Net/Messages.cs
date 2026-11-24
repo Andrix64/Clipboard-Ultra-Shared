@@ -82,7 +82,8 @@ public sealed record PingMessage : CusMessage;
 
 public sealed record ByeMessage(string Reason) : CusMessage;
 
-public sealed record SessionInviteMessage(string SessionId) : CusMessage;
+/// <summary>Host → invitato. La modalità la sceglie chi invita; l'invitato può solo ridurla a sola lettura.</summary>
+public sealed record SessionInviteMessage(string SessionId, ShareDirection Direction = ShareDirection.Bidirectional) : CusMessage;
 
 public sealed record SessionInviteReplyMessage(ConsentDecision Decision, string? Reason) : CusMessage;
 

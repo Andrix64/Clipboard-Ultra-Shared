@@ -30,6 +30,9 @@ public partial class MainWindow : Window
     /// <summary>Aggiornamento della lista dei peer in corso: la selezione cambia, ma non per mano dell'utente.</summary>
     private bool _refreshingPeers;
 
+    /// <summary>Modalità dei prossimi inviti, scelta con il pulsante accanto a INVITA.</summary>
+    private ShareDirection _inviteDirection = ShareDirection.Bidirectional;
+
     /// <summary>Usato solo dal designer di Avalonia.</summary>
     public MainWindow()
         : this(MainWindowModel.Empty)
@@ -188,6 +191,14 @@ public partial class MainWindow : Window
     private void WireSessionControls(CusNode node)
     {
         LeaveButton.Click += async (_, _) => await Run(node.LeaveSessionAsync);
+        ModeButton.Click += (_, _) =>
+        {
+            _inviteDirection = _inviteDirection == ShareDirection.Bidirectional ? ShareDirection.ReadOnly : ShareDirection.Bidirectional;
+            var readOnly = _inviteDirection == ShareDirection.ReadOnly;
+            ModeButton.Content = readOnly ? "→" : "⇄";
+            ModeLabel.Text = readOnly ? "SOLA LETT." : "BIDIREZ.";
+            Avalonia.Automation.AutomationProperties.SetName(ModeButton, readOnly ? "Modalità: sola lettura" : "Modalità: bidirezionale");
+        };
         InviteButton.Click += async (_, _) =>
         {
             if (PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
@@ -238,10 +249,11 @@ public partial class MainWindow : Window
         InviteButton.IsEnabled = InviteAddressButton.IsEnabled = false;
         try
         {
-            AddActivity($"Richiesta inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
+            var direction = _inviteDirection;
+            AddActivity($"Richiesta{(direction == ShareDirection.ReadOnly ? " in sola lettura" : "")} inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
             await Run(async () =>
             {
-                var result = await node.InviteAsync(host, port, expectedDeviceId);
+                var result = await node.InviteAsync(host, port, expectedDeviceId, direction);
                 if (result.Outcome == InviteOutcome.Rejected)
                     AddActivity($"{result.PeerName} ha rifiutato" + (result.Reason is null ? "." : $": {result.Reason}."));
             });

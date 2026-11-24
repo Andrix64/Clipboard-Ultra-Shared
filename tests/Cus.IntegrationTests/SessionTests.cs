@@ -59,21 +59,61 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ReadOnlyMember_SendsButDoesNotReceive()
+    public async Task ReadOnlyInvite_MemberReceives_ButDoesNotSend()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+
+        var result = await andrea.InviteAsync(luca, ShareDirection.ReadOnly);
+
+        Assert.Equal(InviteOutcome.AcceptedReadOnly, result.Outcome);
+        Assert.Equal(ShareDirection.ReadOnly, Assert.Single(luca.Consent.Requests).RequestedDirection);
+        Assert.Contains(andrea.Node.Session!.Participants, p => p.Direction == ShareDirection.ReadOnly);
+        await Eventually.TrueAsync(() => luca.Node.Session?.Role == SessionRole.Member, "luca è membro");
+
+        andrea.Copy("dall'host");
+        await Eventually.TrueAsync(() => luca.Text == "dall'host", "il membro in sola lettura riceve");
+
+        luca.Copy("resta da Luca");
+        await Task.Delay(300);
+        Assert.Equal("dall'host", andrea.Text);
+        Assert.DoesNotContain(await andrea.Node.GetHistoryAsync(), h => h.Content.Text == "resta da Luca");
+    }
+
+    [Fact]
+    public async Task BidirectionalInvite_CanBeAcceptedReadOnly()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
         luca.Consent.Decision = ConsentDecision.AcceptReadOnly;
 
         var result = await andrea.InviteAsync(luca);
+
         Assert.Equal(InviteOutcome.AcceptedReadOnly, result.Outcome);
-        Assert.Contains(andrea.Node.Session!.Participants, p => p.Direction == ShareDirection.ReadOnly);
+        Assert.Equal(ShareDirection.Bidirectional, Assert.Single(luca.Consent.Requests).RequestedDirection);
+        await Eventually.TrueAsync(() => luca.Node.Session?.Role == SessionRole.Member, "luca è membro");
 
-        andrea.Copy("non deve arrivare a Luca");
-        luca.Copy("da Luca in sola lettura");
-
-        await Eventually.TrueAsync(() => andrea.Text == "da Luca in sola lettura", "l'host riceve dal membro in sola lettura");
+        andrea.Copy("dall'host");
+        await Eventually.TrueAsync(() => luca.Text == "dall'host", "il membro in sola lettura riceve");
+        luca.Copy("resta da Luca");
         await Task.Delay(300);
-        Assert.Equal("da Luca in sola lettura", luca.Text);
+        Assert.Equal("dall'host", andrea.Text);
+    }
+
+    [Fact]
+    public async Task ReadOnlyMember_ReceivesOtherMembersCopies_AndHistory()
+    {
+        var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
+        await host.InviteAsync(b);
+        await host.InviteAsync(c, ShareDirection.ReadOnly);
+        await Eventually.TrueAsync(() => c.Node.Session?.Participants.Count == 3, "c vede tutti i partecipanti");
+
+        b.Copy("da b");
+        await Eventually.TrueAsync(() => c.Text == "da b", "c riceve la copia di b");
+        Assert.Contains(await c.Node.GetHistoryAsync(), h => h.Preview == "da b");
+
+        c.Copy("resta da c");
+        await Task.Delay(300);
+        Assert.Equal("da b", host.Text);
+        Assert.Equal("da b", b.Text);
     }
 
     [Fact]

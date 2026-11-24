@@ -31,7 +31,7 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 - **Membri:** chi riceve la richiesta e la accetta. Ogni membro dà il consenso **all'host**, non agli altri membri.
 - **Distribuzione:** ogni copia, di un membro o dell'host, va all'host, che la distribuisce a tutti gli altri.
 - **Conflitti:** **vince sempre l'ultima copia arrivata all'host.** L'ordine lo decide solo l'host, non gli orologi dei PC.
-- **Sola lettura:** la decide **chi concede** l'accesso ("puoi solo leggere"). Quel membro invia le proprie copie alla sessione, ma non riceve quelle degli altri.
+- **Sola lettura:** la sceglie **chi invita**, per ogni invito. Quel membro riceve tutte le copie della sessione (dell'host e degli altri membri), ma le sue restano sul suo PC. Chi riceve un invito bidirezionale può accettarlo solo in sola lettura; un invito in sola lettura non si può allargare.
 - **Indicatore:** mostra chi è nella sessione e la direzione attiva per ciascuno (bidirezionale o sola lettura).
 - **Cronologia:** sta solo sull'host. I membri la consultano durante la sessione, chiedendola all'host, e vedono solo le voci della sessione in corso. A fine sessione le voci restano nel DB dell'host.
 - **Uscita dell'host:** se l'host si disconnette, la sessione termina per tutti. Non c'è passaggio di ruolo.
@@ -39,8 +39,8 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 ## Flusso
 
 1. Ogni PC esegue il servizio CUS, che si annuncia sulla rete locale (scoperta automatica dei peer).
-2. L'host sceglie uno o più peer dalla lista, oppure ne inserisce IP o nome host a mano, e invia la richiesta.
-3. Ogni destinatario vede una notifica con tre scelte: **Consenti**, **Consenti in sola lettura**, **Rifiuta**.
+2. L'host sceglie uno o più peer dalla lista, oppure ne inserisce IP o nome host a mano, sceglie la modalità (bidirezionale o sola lettura) e invia la richiesta.
+3. Ogni destinatario vede una notifica: per un invito bidirezionale **Consenti**, **Consenti in sola lettura**, **Rifiuta**; per un invito in sola lettura **Consenti** e **Rifiuta**. Un dispositivo abbinato accetta da solo, nella modalità scelta dall'host.
 4. Per chi accetta si apre la sessione:
    - su **tutti i monitor** compare l'indicatore sempre in primo piano in alto a destra, con i partecipanti;
    - le copie passano dall'host e da lì vanno ai membri, rispettando la sola lettura.
@@ -58,7 +58,7 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 
 | Tema | Decisione |
 |---|---|
-| **Direzione** | Bidirezionale oppure **sola lettura**, decisa da chi concede l'accesso. |
+| **Direzione** | Bidirezionale oppure **sola lettura**, scelta da chi invita; chi accetta può solo ridurla a sola lettura. In sola lettura il membro riceve ma non invia. Cambiata il 2026-11-24: prima la decideva chi concedeva l'accesso, e il membro inviava senza ricevere. |
 | **Gruppi** | Sessioni di gruppo con un **host**: tutti danno il consenso all'host, l'host distribuisce le copie e vince sempre l'ultima che gli arriva. |
 | **Indicatore** | Mostra i partecipanti alla sessione. |
 | **File grandi** | **Lazy:** alla copia si annunciano solo i metadati (nome, dimensione, tipo). Il contenuto si trasferisce quando l'altro incolla. |

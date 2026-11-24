@@ -9,7 +9,8 @@ using Cus.Core.Abstractions;
 namespace Cus.UI;
 
 /// <summary>
-/// Finestra "X richiede l'accesso alla tua clipboard, consentire?" con tre scelte. La finestra
+/// Finestra "X richiede l'accesso alla tua clipboard, consentire?": rifiuta, consenti e, per un invito
+/// bidirezionale, sola lettura. La finestra
 /// compare all'improvviso sopra le altre: i pulsanti restano disattivati per un attimo (un clic
 /// o un Invio già in corso non devono diventare un consenso) e il focus parte da "rifiuta".
 /// </summary>
@@ -99,9 +100,21 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             return new StackPanel { Spacing = 8, Children = { choice, Skin.Engraved(label) } };
         }
 
+        // La modalità la sceglie chi invita: un invito bidirezionale si può ridurre a sola lettura,
+        // uno in sola lettura si accetta o si rifiuta.
+        var readOnlyInvite = request.RequestedDirection == ShareDirection.ReadOnly;
         var rejectChoice = Choice("✕", "rifiuta", ConsentDecision.Reject, out var reject);
-        var readOnlyChoice = Choice("◐", "sola lettura", ConsentDecision.AcceptReadOnly, out _);
         var acceptChoice = Choice("✓", "consenti", ConsentDecision.Accept, out _);
+        var choices = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Spacing = 34,
+            Children = { rejectChoice },
+        };
+        if (!readOnlyInvite)
+            choices.Children.Add(Choice("◐", "sola lettura", ConsentDecision.AcceptReadOnly, out _));
+        choices.Children.Add(acceptChoice);
         // Invio ed Esc rifiutano: accettare richiede sempre un clic deliberato.
         reject.IsDefault = true;
         reject.IsCancel = true;
@@ -113,10 +126,15 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             Spacing = 6,
             Children =
             {
-                Skin.LcdText("RICHIESTA DI ACCESSO", 11, bold: true),
-                Skin.LcdText($"{hostName} chiede l'accesso alla tua clipboard. Consentire?", 17, bold: true),
-                Skin.LcdText("Se accetti, ciò che copi arriva agli altri e ciò che copiano loro arriva a te. "
-                    + "In sola lettura invii le tue copie ma non ricevi le loro. Un indicatore in alto a destra resta visibile finché la condivisione è attiva.", 11),
+                Skin.LcdText(readOnlyInvite ? "RICHIESTA DI ACCESSO · SOLA LETTURA" : "RICHIESTA DI ACCESSO", 11, bold: true),
+                Skin.LcdText(readOnlyInvite
+                    ? $"{hostName} vuole condividere la sua clipboard con te in sola lettura. Consentire?"
+                    : $"{hostName} chiede l'accesso alla tua clipboard. Consentire?", 17, bold: true),
+                Skin.LcdText((readOnlyInvite
+                        ? "Se accetti, ciò che copiano gli altri arriva a te; ciò che copi tu resta su questo PC. "
+                        : "Se accetti, ciò che copi arriva agli altri e ciò che copiano loro arriva a te. "
+                            + "In sola lettura ricevi le loro copie ma le tue restano su questo PC. ")
+                    + "Un indicatore in alto a destra resta visibile finché la condivisione è attiva.", 11),
                 Skin.LcdText($"UTENTE {hostUser}", 11),
                 Skin.LcdText("IMPRONTA (confrontala con quella mostrata sull'altro PC)", 11),
                 fingerprintText,
@@ -147,13 +165,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
                     {
                         header,
                         lcd,
-                        new StackPanel
-                        {
-                            Orientation = Orientation.Horizontal,
-                            HorizontalAlignment = HorizontalAlignment.Center,
-                            Spacing = 34,
-                            Children = { rejectChoice, readOnlyChoice, acceptChoice },
-                        },
+                        choices,
                     },
                 }, cornerRadius: 18),
             },

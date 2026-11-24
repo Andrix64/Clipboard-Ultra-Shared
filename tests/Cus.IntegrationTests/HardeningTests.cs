@@ -168,26 +168,87 @@ public sealed class HardeningTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ReadOnlyMember_IgnoresItems_EvenFromAHostThatSendsThemAnyway()
+    public async Task ReadOnlyMember_SendsNothing_AndRefusesFileReads_EvenIfTheHostAsks()
     {
         var member = await Start("member");
-        member.Consent.Decision = ConsentDecision.AcceptReadOnly;
         var evil = DeviceIdentity.Generate("evil", "u");
 
         await using var connection = await PeerConnection.ConnectAsync("127.0.0.1", member.Node.Port, evil, 0, CancellationToken.None);
         await connection.ReceiveAsync<TrustSyncMessage>(TimeSpan.FromSeconds(5));
         await connection.SendAsync(new TrustSyncMessage([]));
-        await connection.SendAsync(new SessionInviteMessage("SESSIONE"));
+        await connection.SendAsync(new SessionInviteMessage("SESSIONE", ShareDirection.ReadOnly));
         var reply = await connection.ReceiveAsync<SessionInviteReplyMessage>(TimeSpan.FromSeconds(5));
+        // Il membro ha risposto "consenti", ma l'invito era in sola lettura.
         Assert.Equal(ConsentDecision.AcceptReadOnly, reply.Decision);
         await Eventually.TrueAsync(() => member.Node.Session is not null, "membro nella sessione");
 
-        // Un host che ignora la sola lettura manda comunque le copie.
-        await connection.SendAsync(new ClipboardItemMessage("0123456789ABCDEF01234567", 1, evil.DeviceId, "evil", ClipboardContent.FromText("dall'host")));
-        await Task.Delay(TimeSpan.FromSeconds(1));
+        member.Copy("segreto del membro");
+        await Task.Delay(500);
+        await connection.SendAsync(new FileReadRequestMessage(1, "0123456789ABCDEF01234567", 0, 0, 10));
 
-        Assert.NotEqual("dall'host", member.Text);
-        Assert.NotNull(member.Node.Session);
+        CusMessage message;
+        var pushes = 0;
+        while ((message = await connection.ReceiveAsync(TimeSpan.FromSeconds(5))) is not FileReadReplyMessage)
+        {
+            if (message is ClipboardPushMessage)
+                pushes++;
+        }
+
+        Assert.Equal(0, pushes);
+        var fileReply = (FileReadReplyMessage)message;
+        Assert.Null(fileReply.Data);
+        Assert.Contains("sola lettura", fileReply.Error);
+    }
+
+    [Fact]
+    public async Task ReadOnlyInvite_PushFromTheMember_IsIgnored_ButAcknowledged()
+    {
+        var host = await Start("host");
+        var evil = DeviceIdentity.Generate("evil", "u");
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var invite = host.Node.InviteAsync("127.0.0.1", port, direction: ShareDirection.ReadOnly);
+            using var client = await listener.AcceptTcpClientAsync();
+            await using var connection = await PeerConnection.AcceptAsync(client, evil, port, CancellationToken.None);
+            await connection.SendAsync(new TrustSyncMessage([]));
+            await connection.ReceiveAsync<TrustSyncMessage>(TimeSpan.FromSeconds(5));
+            Assert.Equal(ShareDirection.ReadOnly, (await connection.ReceiveAsync<SessionInviteMessage>(TimeSpan.FromSeconds(5))).Direction);
+
+            // Il membro prova ad allargare l'invito rispondendo "consenti".
+            await connection.SendAsync(new SessionInviteReplyMessage(ConsentDecision.Accept, null));
+            Assert.Equal(InviteOutcome.AcceptedReadOnly, (await invite).Outcome);
+
+            await connection.SendAsync(new ClipboardPushMessage("0123456789ABCDEF01234567", ClipboardContent.FromText("dal membro")));
+            var ack = await ReceiveAsync<ClipboardAckMessage>(connection);
+
+            Assert.Equal("0123456789ABCDEF01234567", ack.ItemId);
+            Assert.Null(host.Clipboard.Current);
+            Assert.Empty(await host.Node.GetHistoryAsync());
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task InviteWithUnknownDirection_IsRejected_WithoutAskingTheUser()
+    {
+        var member = await Start("member");
+        var evil = DeviceIdentity.Generate("evil", "u");
+
+        await using var connection = await PeerConnection.ConnectAsync("127.0.0.1", member.Node.Port, evil, 0, CancellationToken.None);
+        await connection.ReceiveAsync<TrustSyncMessage>(TimeSpan.FromSeconds(5));
+        await connection.SendAsync(new TrustSyncMessage([]));
+        await connection.SendAsync(new SessionInviteMessage("SESSIONE", (ShareDirection)7));
+        var reply = await connection.ReceiveAsync<SessionInviteReplyMessage>(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ConsentDecision.Reject, reply.Decision);
+        Assert.Empty(member.Consent.Requests);
+        Assert.Null(member.Node.Session);
     }
 
     [Fact]

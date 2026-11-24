@@ -36,6 +36,25 @@ public sealed class PairingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PairedDevice_ReadOnlyInvite_IsAcceptedReadOnly_WithoutConsent()
+    {
+        var (portatile, fisso) = (await Start("andrea-portatile"), await Start("andrea-fisso"));
+        await Pair(portatile, fisso);
+        fisso.Consent.Decision = ConsentDecision.Reject; // non deve essere chiesto
+
+        var result = await portatile.InviteAsync(fisso, ShareDirection.ReadOnly);
+
+        Assert.Equal(InviteOutcome.AcceptedReadOnly, result.Outcome);
+        Assert.Empty(fisso.Consent.Requests);
+        await Eventually.TrueAsync(() => fisso.Node.Session is not null, "fisso nella sessione");
+        portatile.Copy("dal portatile");
+        await Eventually.TrueAsync(() => fisso.Text == "dal portatile", "fisso riceve");
+        fisso.Copy("resta sul fisso");
+        await Task.Delay(300);
+        Assert.Equal("dal portatile", portatile.Text);
+    }
+
+    [Fact]
     public async Task WrongCode_ThreeTimes_ExhaustsTheCode()
     {
         var (a, b) = (await Start("a"), await Start("b"));

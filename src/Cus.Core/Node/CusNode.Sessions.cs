@@ -26,8 +26,16 @@ public sealed partial class CusNode
     /// Per i peer scelti dall'elenco: l'identità annunciata. Gli annunci non sono autenticati, quindi
     /// si verifica che il canale cifrato appartenga davvero a quel dispositivo prima di condividere.
     /// </param>
-    public async Task<InviteResult> InviteAsync(string host, int port, string? expectedDeviceId = null, CancellationToken cancellationToken = default)
+    /// <param name="direction">
+    /// Modalità scelta da chi invita: in sola lettura l'altro riceve le copie della sessione ma non
+    /// invia le proprie. L'invitato può ridurre un invito bidirezionale a sola lettura, mai il contrario.
+    /// </param>
+    public async Task<InviteResult> InviteAsync(
+        string host, int port, string? expectedDeviceId = null, ShareDirection direction = ShareDirection.Bidirectional,
+        CancellationToken cancellationToken = default)
     {
+        if (!Enum.IsDefined(direction))
+            throw new ArgumentOutOfRangeException(nameof(direction));
         if (_memberSession is not null)
             throw new CusOperationException("Sei membro di una sessione: esci prima di invitare altri.");
 
@@ -70,8 +78,10 @@ public sealed partial class CusNode
 
         try
         {
-            Log($"Richiesta di accesso inviata a {name}.");
-            await connection.SendAsync(new SessionInviteMessage(sessionId), cancellationToken);
+            Log(direction == ShareDirection.ReadOnly
+                ? $"Richiesta di accesso in sola lettura inviata a {name}."
+                : $"Richiesta di accesso inviata a {name}.");
+            await connection.SendAsync(new SessionInviteMessage(sessionId, direction), cancellationToken);
             var reply = await connection.ReceiveAsync<SessionInviteReplyMessage>(_options.ConsentTimeout + TimeSpan.FromSeconds(15), cancellationToken);
 
             if (reply.Decision == ConsentDecision.Reject)
@@ -81,7 +91,11 @@ public sealed partial class CusNode
                 return new InviteResult(InviteOutcome.Rejected, name, reply.Reason);
             }
 
-            var direction = reply.Decision == ConsentDecision.AcceptReadOnly ? ShareDirection.ReadOnly : ShareDirection.Bidirectional;
+            // L'invitato può ridurre a sola lettura, mai allargare: un invito in sola lettura resta tale
+            // qualunque cosa risponda.
+            var granted = direction == ShareDirection.ReadOnly || reply.Decision == ConsentDecision.AcceptReadOnly
+                ? ShareDirection.ReadOnly
+                : ShareDirection.Bidirectional;
             await _gate.WaitAsync(cancellationToken);
             try
             {
@@ -98,7 +112,7 @@ public sealed partial class CusNode
                     throw new CusOperationException($"{name} è già nella sessione.");
                 }
 
-                _hostSession.Members[connection.Remote.DeviceId] = new Member(connection, direction);
+                _hostSession.Members[connection.Remote.DeviceId] = new Member(connection, granted);
                 connection.MessageHandler = HostHandleMessageAsync;
                 connection.Closed += (c, reason) => RunInBackground(() => OnMemberClosedAsync(c, reason));
                 connection.Start();
@@ -110,10 +124,10 @@ public sealed partial class CusNode
             }
 
             await BroadcastStateAsync();
-            Log(direction == ShareDirection.ReadOnly
-                ? $"{name} ha accettato in sola lettura: invia le sue copie ma non riceve le altre."
+            Log(granted == ShareDirection.ReadOnly
+                ? $"{name} ha accettato in sola lettura: riceve le copie della sessione ma non invia le sue."
                 : $"{name} ha accettato: clipboard condivisa.");
-            return new InviteResult(direction == ShareDirection.ReadOnly ? InviteOutcome.AcceptedReadOnly : InviteOutcome.Accepted, name, null);
+            return new InviteResult(granted == ShareDirection.ReadOnly ? InviteOutcome.AcceptedReadOnly : InviteOutcome.Accepted, name, null);
         }
         catch (Exception ex) when (ex is not CusOperationException)
         {
@@ -156,6 +170,13 @@ public sealed partial class CusNode
 
         switch (message)
         {
+            // Sola lettura: il membro riceve le copie della sessione ma le sue non entrano, anche se
+            // le manda comunque. La conferma serve lo stesso, come per ogni copia ignorata.
+            case ClipboardPushMessage push when member.Direction == ShareDirection.ReadOnly:
+                Log($"Copia di {connection.Remote.DisplayName} ignorata: partecipa in sola lettura");
+                if (push.ItemId is { Length: <= 64 })
+                    await AcknowledgeIgnoredPushAsync(connection, push.ItemId);
+                break;
             case ClipboardPushMessage push:
                 var why = push.ItemId is null || push.Content is null ? "messaggio incompleto"
                     : !IsValidItemId(push.ItemId) ? "identificativo non valido"
@@ -174,13 +195,8 @@ public sealed partial class CusNode
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
                 break;
-            // Sola lettura: il membro invia le sue copie ma non riceve quelle altrui, nemmeno dalla cronologia.
             case HistoryRequestMessage request:
-                await connection.SendAsync(new HistoryReplyMessage(request.RequestId,
-                    member.Direction == ShareDirection.ReadOnly ? [] : SessionHistoryPreviews(connection)));
-                break;
-            case HistoryItemRequestMessage request when member.Direction == ShareDirection.ReadOnly:
-                await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, null, "In sola lettura la cronologia non è disponibile."));
+                await connection.SendAsync(new HistoryReplyMessage(request.RequestId, SessionHistoryPreviews(connection)));
                 break;
             case HistoryItemRequestMessage request:
                 await SendHistoryItemAsync(connection, request);
@@ -323,7 +339,7 @@ public sealed partial class CusNode
             // Invii in parallelo, ognuno con il proprio timeout (PeerConnection.SendTimeout): un membro
             // lento non ritarda gli altri e non tiene _gate oltre quel limite.
             var targets = session.Members.Values
-                .Where(m => m.Direction == ShareDirection.Bidirectional && m.Connection != originConnection)
+                .Where(m => m.Connection != originConnection)
                 .ToList();
             await Task.WhenAll(targets.Select(member => SendItemAsync(member.Connection, item)));
         }
@@ -431,10 +447,16 @@ public sealed partial class CusNode
     private async Task HandleInviteAsync(PeerConnection connection, SessionInviteMessage invite)
     {
         var remote = connection.Remote;
+        var requested = invite.Direction;
         ConsentDecision decision;
         string? reason = null;
 
-        if (_hostSession is not null || _memberSession is not null)
+        if (!Enum.IsDefined(requested))
+        {
+            decision = ConsentDecision.Reject;
+            reason = "richiesta non valida";
+        }
+        else if (_hostSession is not null || _memberSession is not null)
         {
             decision = ConsentDecision.Reject;
             reason = "è già in un'altra sessione";
@@ -442,7 +464,9 @@ public sealed partial class CusNode
         else if (Trust.State.IsTrusted(remote.DeviceId))
         {
             decision = ConsentDecision.Accept;
-            _notifier.Info($"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te.");
+            _notifier.Info(requested == ShareDirection.ReadOnly
+                ? $"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te in sola lettura."
+                : $"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te.");
         }
         else if (Interlocked.CompareExchange(ref _consentPending, 1, 0) != 0)
         {
@@ -457,7 +481,7 @@ public sealed partial class CusNode
             timeout.CancelAfter(_options.ConsentTimeout);
             try
             {
-                decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint), timeout.Token);
+                decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint, requested), timeout.Token);
             }
             catch (OperationCanceledException)
             {
@@ -488,6 +512,13 @@ public sealed partial class CusNode
                 reason = "è già in un'altra sessione";
             }
 
+            // Un invito in sola lettura resta tale anche se qui si è risposto "consenti".
+            var direction = requested == ShareDirection.ReadOnly || decision == ConsentDecision.AcceptReadOnly
+                ? ShareDirection.ReadOnly
+                : ShareDirection.Bidirectional;
+            if (decision != ConsentDecision.Reject)
+                decision = direction == ShareDirection.ReadOnly ? ConsentDecision.AcceptReadOnly : ConsentDecision.Accept;
+
             await connection.SendAsync(new SessionInviteReplyMessage(decision, reason));
             if (decision == ConsentDecision.Reject)
             {
@@ -495,7 +526,6 @@ public sealed partial class CusNode
                 return;
             }
 
-            var direction = decision == ConsentDecision.AcceptReadOnly ? ShareDirection.ReadOnly : ShareDirection.Bidirectional;
             _memberSession = new MemberSession(invite.SessionId, connection, direction, new SessionView(invite.SessionId, SessionRole.Member,
             [
                 new SessionParticipant(remote.DisplayName, ShareDirection.Bidirectional, IsHost: true),
@@ -588,10 +618,6 @@ public sealed partial class CusNode
             if (_memberSession is not { } session || session.Host != connection || item.Sequence <= session.LastSequence)
                 return;
             session.LastSequence = item.Sequence;
-
-            // Sola lettura scelta qui: vale anche se l'host non la rispetta.
-            if (session.Direction == ShareDirection.ReadOnly)
-                return;
 
             // Una propria copia è ancora in viaggio verso l'host: verrà ordinata dopo questa e la
             // supererà. Applicare questa ora lascerebbe questo PC diverso dagli altri.
@@ -706,6 +732,10 @@ public sealed partial class CusNode
         var stamp = Interlocked.Increment(ref _clipboardStamp);
         lock (_offerGate)
             _localOffer = content.Kind == ClipboardContentKind.Files && content.Files is { } files ? (itemId, files) : null;
+
+        // Sola lettura: le copie fatte su questo PC non escono.
+        if (_memberSession is { Direction: ShareDirection.ReadOnly })
+            return;
 
         if (content.IsMarkedSensitive)
         {
@@ -891,8 +921,10 @@ public sealed partial class CusNode
         var inSession = hostMember is not null || member?.Host == connection;
         if (!inSession)
             throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo non è nella sessione.");
-        if (hostMember?.Direction == ShareDirection.ReadOnly)
-            throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo è in sola lettura.");
+
+        // In sola lettura nessun file di questo PC è stato condiviso: vale anche se l'host li chiede comunque.
+        if (member?.Host == connection && member.Direction == ShareDirection.ReadOnly)
+            throw new RemoteFileUnavailableException("Richiesta non autorizzata: questo PC partecipa in sola lettura.");
 
         if (TryReadLocalOffer(request.ItemId, request.FileIndex, request.Offset, request.Count, out var data))
             return data;

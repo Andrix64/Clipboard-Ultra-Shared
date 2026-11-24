@@ -4,12 +4,12 @@
 
 ## Stato al 2026-11-24
 
-Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 223 su 223 (dopo la seconda revisione):
+Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 228 su 228 (dopo la modifica della sola lettura):
 
 | Progetto di test | Test | Copre |
 |---|---|---|
 | `Cus.Core.Tests` | 134 | opzioni, profili, DB cifrato e migrazioni, PNG, CPace (test vector B.3), canale cifrato, lista di fiducia, nomi dei file ricevuti |
-| `Cus.IntegrationTests` | 32 | più nodi in loopback: sessioni, gruppi, sola lettura, convergenza, file lazy, cronologia, abbinamento, revoche, scoperta, messaggi ostili |
+| `Cus.IntegrationTests` | 37 | più nodi in loopback: sessioni, gruppi, sola lettura, convergenza, file lazy, cronologia, abbinamento, revoche, scoperta, messaggi ostili |
 | `Cus.Platform.Windows.Tests` | 57 | DPAPI, DIB, clipboard reale, contenuti sensibili, virtual files, incolla vero con Esplora risorse |
 
 Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
@@ -36,6 +36,7 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
 - **Indirizzi dei PC abbinati:** si memorizzano (porta di ascolto inclusa nel saluto) per consegnare revoche e abbinamenti anche senza scoperta automatica.
 - **Indicatore:** finestre Avalonia, una per monitor, rese non attivabili e fuori da Alt+Tab via Win32 (`Cus.App.Windows/NativeWindowStyle.cs`). In modalità simulata non compare, per non sovrapporre gli indicatori di più istanze; lo stato si vede nel display della finestra.
 - **Interfaccia:** skin "lettore retrò" (telaio metallico, display LCD lime, pulsanti tondi), definito in `Cus.UI/Skin.cs` e `Cus.UI/SkinStyles.axaml`.
+- **Sola lettura scelta da chi invita (2026-11-24):** la modalità la sceglie l'host per ogni invito (pulsante accanto a INVITA), e l'invitato può solo ridurre un invito bidirezionale a sola lettura. In sola lettura il membro riceve tutte le copie della sessione, cronologia e file compresi, ma le sue non escono: il membro non le invia, l'host le ignora se arrivano comunque e il membro rifiuta le letture dei propri file. Prima era il contrario: la sceglieva chi accettava, e il membro inviava senza ricevere.
 - **Indurimento dopo la revisione di sicurezza (2026-11-24):**
   - un invito a un peer scelto dall'elenco verifica che il canale appartenga al `DeviceId` annunciato; gli annunci si tengono per ID + indirizzo, così uno falso non sostituisce quello vero;
   - i nomi dei file ricevuti si validano (`Cus.Core/Abstractions/ClipboardFileNames.cs`): niente `..`, `\`, `:`, nomi di dispositivo, oltre 10.000 file o 32 livelli; un elenco non valido si rifiuta per intero;
@@ -137,9 +138,9 @@ Ogni fase deve essere verificabile con un solo PC Windows. I mezzi, già predisp
   - mDNS/DNS-SD, con nome di servizio che include il profilo, così più istanze sullo stesso PC sono distinguibili;
   - peer manuali con IP o nome host.
 - **Sessioni:**
-  - l'host è chi invia la richiesta, e la notifica offre Consenti, Consenti in sola lettura, Rifiuta;
+  - l'host è chi invia la richiesta e ne sceglie la modalità; la notifica offre Consenti, Consenti in sola lettura (solo per un invito bidirezionale), Rifiuta;
   - le copie passano dall'host, che le distribuisce agli altri; vince l'ultima arrivata, ordinata dal numero di sequenza assegnato dall'host;
-  - un membro in sola lettura invia le proprie copie ma non riceve quelle degli altri;
+  - un membro in sola lettura riceve tutte le copie della sessione ma non invia le proprie (cambiato il 2026-11-24, vedi lo stato);
   - se l'host si disconnette, la sessione termina per tutti; un membro può uscire da solo;
   - i contenuti sensibili non lasciano mai il PC.
 - **Contenuti:** testo e immagini. I file arrivano in fase 4.

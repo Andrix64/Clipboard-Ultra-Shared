@@ -87,7 +87,8 @@ public sealed class TestNode : IAsyncDisposable
         ConsentTimeout = TimeSpan.FromSeconds(10),
     };
 
-    public Task<InviteResult> InviteAsync(TestNode other) => Node.InviteAsync("127.0.0.1", other.Node.Port);
+    public Task<InviteResult> InviteAsync(TestNode other, ShareDirection direction = ShareDirection.Bidirectional) =>
+        Node.InviteAsync("127.0.0.1", other.Node.Port, direction: direction);
 
     public void Copy(string text) => Clipboard.Copy(ClipboardContent.FromText(text));
 

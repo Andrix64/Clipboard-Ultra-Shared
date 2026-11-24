@@ -61,15 +61,13 @@ public sealed class FileTransferTests : IAsyncLifetime
     public async Task Paste_AfterOriginCopiedSomethingElse_GivesClearError()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        luca.Consent.Decision = ConsentDecision.AcceptReadOnly; // così la copia di Andrea non sovrascrive quella di Luca
         await andrea.InviteAsync(luca);
-        luca.Consent.Decision = ConsentDecision.Accept;
 
         var files = CreateFiles("luca-files", ("a.bin", 100));
         luca.Clipboard.Copy(ClipboardContent.FromFiles(files));
         await Eventually.TrueAsync(() => andrea.Clipboard.Current?.Kind == ClipboardContentKind.Files, "andrea riceve i file");
 
-        // Luca copia altro, ma in sola lettura riceve solo lui: il file non è più offerto.
+        // Luca copia altro: il file non è più offerto.
         luca.Copy("altro");
         await Eventually.TrueAsync(() => andrea.Text == "altro", "la nuova copia arriva");
         var history = await andrea.Node.GetHistoryAsync();

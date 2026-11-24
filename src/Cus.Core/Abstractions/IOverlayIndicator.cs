@@ -4,7 +4,7 @@ public enum ShareDirection
 {
     Bidirectional,
 
-    /// <summary>Il membro invia le proprie copie alla sessione ma non riceve quelle degli altri.</summary>
+    /// <summary>Il membro riceve le copie della sessione ma non invia le proprie: la sua clipboard resta sul suo PC.</summary>
     ReadOnly,
 }
 

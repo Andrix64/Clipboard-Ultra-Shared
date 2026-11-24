@@ -141,10 +141,15 @@
           <TextBlock x:Name="StartupErrorText" Classes="lcd-dark" Foreground="{x:Static ui:Skin.AlertBrush}" TextWrapping="Wrap" />
         </Border>
 
-        <StackPanel x:Name="Controls" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="30">
+        <StackPanel x:Name="Controls" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="22">
           <StackPanel Spacing="10">
             <Button x:Name="InviteButton" AutomationProperties.Name="Invita" Classes="round" Content="▶" FontSize="20" ToolTip.Tip="Richiedi accesso al peer selezionato" />
             <TextBlock Classes="engraved" Text="INVITA" HorizontalAlignment="Center" />
+          </StackPanel>
+          <StackPanel Spacing="10">
+            <Button x:Name="ModeButton" AutomationProperties.Name="Modalità: bidirezionale" Classes="round" Content="⇄" FontSize="20"
+                    ToolTip.Tip="Modalità del prossimo invito. Bidirezionale: le copie vanno in entrambe le direzioni. Sola lettura: l'invitato riceve le copie della sessione ma non invia le sue." />
+            <TextBlock x:Name="ModeLabel" Classes="engraved" Text="BIDIREZ." HorizontalAlignment="Center" />
           </StackPanel>
           <StackPanel Spacing="10">
             <Button x:Name="LeaveButton" AutomationProperties.Name="Esci" Classes="round" Content="■" FontSize="18" ToolTip.Tip="Esci dalla sessione" />
