@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Eseguibile Windows: legge le opzioni da riga di comando, sceglie le implementazioni
+       (Windows reali o simulate) e avvia la UI. In futuro gli si affiancherà Cus.App.Linux. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>Cus.App.Windows</RootNamespace>
+    <AssemblyName>cus</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+    <ProjectReference Include="..\Cus.UI\Cus.UI.csproj" />
+    <ProjectReference Include="..\Cus.Platform.Windows\Cus.Platform.Windows.csproj" />
+    <ProjectReference Include="..\Cus.Platform.Simulated\Cus.Platform.Simulated.csproj" />
+  </ItemGroup>
+
+</Project>

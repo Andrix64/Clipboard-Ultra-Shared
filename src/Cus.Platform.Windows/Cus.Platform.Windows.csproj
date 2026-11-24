@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Implementazioni Windows delle interfacce di Cus.Core (clipboard Win32, DPAPI, indicatore
+       topmost). Unico posto, insieme a Cus.App.Windows, dove sono ammesse API di Windows. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>Cus.Platform.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+  </ItemGroup>
+
+</Project>

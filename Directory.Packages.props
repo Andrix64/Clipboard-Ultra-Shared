@@ -1,0 +1,29 @@
+<Project>
+  <!-- Versioni centralizzate dei pacchetti. Ogni dipendenza qui è stata approvata (vedi IDEA.md):
+       aggiungerne una nuova richiede approvazione. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="UI">
+    <PackageVersion Include="Avalonia" Version="12.2.0" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.2.0" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.2.0" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.2.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Persistenza e crittografia">
+    <!-- Microsoft.Data.Sqlite.Core (non Microsoft.Data.Sqlite) per non avere due bundle SQLitePCLRaw.
+         La 11.x usa SQLitePCLRaw 3.x, la stessa serie richiesta da SQLite3MC 2.7.x. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0" />
+    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.7.1" />
+    <PackageVersion Include="libsodium" Version="1.0.22" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+</Project>

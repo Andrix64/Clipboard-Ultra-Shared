@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Implementazioni simulate delle interfacce di piattaforma: clipboard virtuale per istanza,
+       indicatore senza finestre, chiavi in memoria. Servono per far girare più istanze sullo
+       stesso PC e per i test. Multipiattaforma. -->
+  <PropertyGroup>
+    <RootNamespace>Cus.Platform.Simulated</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+  </ItemGroup>
+
+</Project>

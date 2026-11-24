@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Cus.Core/Cus.Core.csproj" />
+    <Project Path="src/Cus.Platform.Simulated/Cus.Platform.Simulated.csproj" />
+    <Project Path="src/Cus.Platform.Windows/Cus.Platform.Windows.csproj" />
+    <Project Path="src/Cus.UI/Cus.UI.csproj" />
+    <Project Path="src/Cus.App.Windows/Cus.App.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cus.Core.Tests/Cus.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="IDEA.md" />
+    <File Path="PLAN.md" />
+  </Folder>
+</Solution>

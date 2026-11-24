@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test del nucleo e delle implementazioni simulate. Non dipendono da Windows:
+       devono poter girare anche su Linux (vedi IDEA.md, "Predisposizione per Linux"). -->
+  <PropertyGroup>
+    <RootNamespace>Cus.Core.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cus.Core\Cus.Core.csproj" />
+    <ProjectReference Include="..\..\src\Cus.Platform.Simulated\Cus.Platform.Simulated.csproj" />
+  </ItemGroup>
+
+</Project>

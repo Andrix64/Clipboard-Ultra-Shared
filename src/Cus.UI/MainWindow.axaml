@@ -1,0 +1,22 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Cus.UI.MainWindow"
+        Width="520" Height="420"
+        Title="CUS">
+  <DockPanel Margin="16">
+    <TextBlock x:Name="InfoText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12" />
+
+    <StackPanel x:Name="SimulatedPanel" DockPanel.Dock="Top" Spacing="8" IsVisible="False">
+      <TextBlock Text="Clipboard simulata di questa istanza" FontWeight="SemiBold" />
+      <DockPanel>
+        <Button x:Name="CopyButton" DockPanel.Dock="Right" Content="Copia" Margin="8,0,0,0" />
+        <TextBox x:Name="CopyInput" PlaceholderText="Testo da copiare" />
+      </DockPanel>
+    </StackPanel>
+
+    <StackPanel Spacing="4" Margin="0,12,0,0">
+      <TextBlock Text="Contenuto attuale della clipboard" FontWeight="SemiBold" />
+      <TextBlock x:Name="CurrentText" TextWrapping="Wrap" Text="(vuota)" />
+    </StackPanel>
+  </DockPanel>
+</Window>

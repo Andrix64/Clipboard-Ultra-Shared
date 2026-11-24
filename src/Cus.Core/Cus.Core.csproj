@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Nucleo indipendente dalla piattaforma: niente API di Windows, niente #if WINDOWS.
+       Le parti native passano dalle interfacce in Abstractions/. -->
+  <PropertyGroup>
+    <RootNamespace>Cus.Core</RootNamespace>
+    <!-- Necessario per [LibraryImport] verso libsodium. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="SQLite3MC.PCLRaw.bundle" />
+    <PackageReference Include="libsodium" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cus.Core.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project>
+  <!-- Impostazioni comuni a tutti i progetti. Il target è .NET 10 (LTS): è il minimo richiesto
+       da SQLite3MC per passare la password nella stringa di connessione (vedi IDEA.md). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
