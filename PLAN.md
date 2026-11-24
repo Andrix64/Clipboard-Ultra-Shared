@@ -2,6 +2,51 @@
 
 > Creato il 2026-11-24. Copre solo lo sviluppo, fino a un'applicazione Windows completa e provata. Restano fuori installer, firma del codice, distribuzione, aggiornamenti automatici e porting a Linux. Requisiti e decisioni sono in [IDEA.md](IDEA.md).
 
+## Stato al 2026-11-24
+
+Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 123 su 123:
+
+| Progetto di test | Test | Copre |
+|---|---|---|
+| `Cus.Core.Tests` | 86 | opzioni, profili, DB cifrato e migrazioni, PNG, CPace (test vector B.3), canale cifrato, lista di fiducia |
+| `Cus.IntegrationTests` | 23 | più nodi in loopback: sessioni, gruppi, sola lettura, convergenza, file lazy, cronologia, abbinamento, revoche, scoperta |
+| `Cus.Platform.Windows.Tests` | 14 | DPAPI, DIB, clipboard reale, contenuti sensibili, virtual files, incolla vero con Esplora risorse |
+
+Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
+
+- due istanze simulate: invito, consenso, copie nei due sensi, cronologia;
+- istanza `real` contro `simulated`: clipboard di Windows nei due sensi, indicatore su tutti e 3 i monitor, clic sull'indicatore che chiude la sessione senza rubare il focus;
+- file da 1 GB copiato su un nodo e incollato da Esplora risorse sull'altro: hash identico, circa 14 s in loopback (`CUS_BIG_FILE_MB=1024`).
+
+### Scostamenti dal piano
+
+- **Trasporto:** al posto di TLS con certificati autofirmati c'è un canale costruito con libsodium (`Cus.Core/Net/SecureChannel.cs`):
+  - chiavi effimere X25519 firmate con l'identità Ed25519;
+  - chiavi di sessione legate alla trascrizione;
+  - secretstream XChaCha20-Poly1305 in ogni direzione.
+
+  Motivo: è la stessa identità usata da abbinamento e revoche, senza gestire certificati, e funziona uguale su Linux. IDEA.md lo prevedeva come alternativa ("un protocollo tipo Noise").
+- **Scoperta:** annunci UDP multicast (239.255.23.70:23701) invece di mDNS/DNS-SD. Sono più semplici e permettono più istanze sullo stesso PC. Gli annunci non sono autenticati: l'identità la verifica il canale. Gli annunci dallo stesso PC vengono mappati su 127.0.0.1.
+- **Ordine delle copie:**
+  - le copie locali si elaborano in coda, una alla volta;
+  - l'host conferma ogni copia ricevuta (`ClipboardAckMessage`), e un membro non applica copie altrui finché la propria non è confermata;
+  - l'host scarta una propria copia superata da una remota già scritta.
+
+  Senza queste regole, con copie quasi simultanee i PC potevano restare diversi tra loro.
+- **Indirizzi dei PC abbinati:** si memorizzano (porta di ascolto inclusa nel saluto) per consegnare revoche e abbinamenti anche senza scoperta automatica.
+- **Indicatore:** finestre Avalonia, una per monitor, rese non attivabili e fuori da Alt+Tab via Win32 (`Cus.App.Windows/NativeWindowStyle.cs`). In modalità simulata non compare, per non sovrapporre gli indicatori di più istanze; lo stato si vede nel display della finestra.
+- **Interfaccia:** skin "lettore retrò" (telaio metallico, display LCD lime, pulsanti tondi), definito in `Cus.UI/Skin.cs` e `Cus.UI/SkinStyles.axaml`.
+
+### Come provare a mano
+
+```powershell
+.\scripts\run-two-instances.ps1
+```
+
+```powershell
+.\scripts\run-two-instances.ps1 -Mode RealAndSimulated
+```
+
 ## Stato di partenza (fase 0, completata il 2026-11-24)
 
 - **Soluzione:** `Cus.slnx` con .NET 10, gestione centralizzata dei pacchetti (`Directory.Packages.props`) e `nuget.config` con solo nuget.org.

@@ -76,6 +76,7 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 | **Persistenza** | **SQLite cifrato**, un file per utente nella cartella dati dell'utente (`AppData`). |
 | **UI** | **Avalonia**. |
 | **Cifratura DB** | **SQLite3 Multiple Ciphers** (SQLite3MC), verificato il 2026-11-24 (vedi sotto). |
+| **Interfaccia** | Skin "lettore retrò": telaio in metallo scuro, display LCD verde lime, pulsanti tondi lucidi (richiesta del 2026-11-24). |
 
 ## Stack
 
@@ -174,8 +175,8 @@ Fonti: [draft-irtf-cfrg-cpace su Datatracker](https://datatracker.ietf.org/doc/d
 ### Porte: 23700–23709
 
 - **Perché questo range:** nel registro IANA è libero (fa parte di un blocco non assegnato da 23547 a 23999). Sta anche sotto i range effimeri di default: Linux usa 32768–60999, Windows 49152–65535.
-- **Uso previsto:** 23700 per la connessione TCP (sessioni e trasferimenti) e 23701 per la scoperta via UDP, se non si usa mDNS. 23702–23709 sono riserve, se le prime sono occupate.
-- **Fallback:** se la porta è occupata, CUS prova la successiva del range e annuncia via mDNS quella effettiva. Nell'inserimento manuale si accetta anche `host:porta`.
+- **Uso previsto:** TCP dalla prima libera tra 23700 e 23709 per sessioni e trasferimenti; UDP 23701 (multicast 239.255.23.70) per la scoperta.
+- **Fallback:** se la porta è occupata, CUS prova la successiva del range e la annuncia nella scoperta. Nell'inserimento manuale si accetta anche `host:porta`.
 
 > [!warning]
 > Su alcuni PC il range dinamico di Windows è stato allargato. Sul PC di sviluppo, al 2026-11-24, va da 1024 a 65535 (`netsh int ipv4 show dynamicport tcp`). In quel caso qualunque porta può essere occupata da una connessione in uscita: il fallback sul range non è facoltativo. Va anche documentata la regola firewall da aprire.
@@ -186,8 +187,8 @@ Nessuna al 2026-11-24: tutte le domande emerse finora hanno una decisione.
 
 ## Note tecniche iniziali (da validare)
 
-- **Scoperta peer:** mDNS/DNS-SD. Se fallisce si usa l'IP o il nome host inserito a mano.
-- **Trasporto:** TLS su TCP con certificati autofirmati e fingerprint verificato all'abbinamento, oppure un protocollo tipo Noise.
+- **Scoperta peer (implementata, 2026-11-24):** annunci UDP multicast, non autenticati. Se non funzionano si usa l'IP o il nome host inserito a mano.
+- **Trasporto (implementato, 2026-11-24):** canale tipo Noise su TCP con libsodium: chiavi effimere X25519 firmate con l'identità Ed25519, secretstream XChaCha20-Poly1305. Dettagli e motivazione in [PLAN.md](PLAN.md), "Scostamenti dal piano".
 - **Evitare i loop:** non deve succedere che un contenuto ricevuto venga scritto in clipboard, rilevato come nuova copia e rimandato indietro. Le voci scritte da CUS vanno marcate o riconosciute.
 - **Ordine delle copie:** l'host assegna un numero di sequenza a ogni copia che riceve; i membri applicano solo copie con numero maggiore dell'ultima vista.
 
