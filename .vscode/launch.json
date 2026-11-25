@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CUS (Windows) - Debug",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Cus.App.Windows/bin/Debug/net10.0-windows10.0.17763.0/cus.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/Cus.App.Windows",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "CUS (Windows) - Attach",
+      "type": "coreclr",
+      "request": "attach",
+      "processName": "cus.exe"
+    }
+  ]
+}
