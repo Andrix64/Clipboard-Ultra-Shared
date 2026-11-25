@@ -33,12 +33,11 @@ public sealed class ExplorerPasteTests : IDisposable
         Assert.Equal(PatternSource.Expected(1, 10), await File.ReadAllBytesAsync(small));
         Assert.True(source.Reads >= 3);
 
-        // Arrivano da un altro PC: Esplora risorse li marca come scaricati (Mark-of-the-Web, zona Internet).
-        foreach (var pasted in new[] { big, small })
-        {
-            var zone = await File.ReadAllTextAsync(pasted + ":Zone.Identifier");
-            Assert.Contains("ZoneId=3", zone);
-        }
+        // Arrivano da un altro PC: Esplora risorse marca il file come scaricato (Mark-of-the-Web, zona
+        // Internet). Lo fa solo per il primo file dell'incolla: legge ZoneIdentifier una volta sola e gli
+        // altri file restano senza marca (limite di Esplora risorse, accettato il 2026-11-25).
+        var zone = await File.ReadAllTextAsync(big + ":Zone.Identifier");
+        Assert.Contains("ZoneId=3", zone);
     }
 
     public void Dispose()

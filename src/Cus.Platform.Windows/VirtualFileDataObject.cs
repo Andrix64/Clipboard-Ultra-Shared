@@ -89,7 +89,9 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         }
 
         // File arrivati da un altro PC: zona Internet. Esplora risorse aggiunge il Mark-of-the-Web, e un
-        // eseguibile ricevuto passa dal controllo di SmartScreen come uno scaricato.
+        // eseguibile ricevuto passa dal controllo di SmartScreen come uno scaricato. Limite di Esplora
+        // risorse: chiede questo formato una volta sola e marca solo il primo file dell'incolla; per gli
+        // altri resta l'avviso di CusNode.WarnAboutExecutables.
         if (cf == _formats.ZoneIdentifier && (format.tymed & TYMED.TYMED_HGLOBAL) != 0)
         {
             medium = HGlobal(BitConverter.GetBytes(UrlZoneInternet));
