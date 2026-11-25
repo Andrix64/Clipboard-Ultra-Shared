@@ -507,7 +507,7 @@ public sealed partial class CusNode : IAsyncDisposable
     /// Gli altri non scoprono nemmeno quale PC c'è a quell'indirizzo (identità, nome, utente).
     /// </summary>
     private bool RevealsIdentityTo(string deviceId) =>
-        _visible || Friends.AgreementWith(deviceId) != AgreementLevel.None;
+        _visible || _hostSession is { Offered: true } || Friends.AgreementWith(deviceId) != AgreementLevel.None;
 
     // ================================================================ scoperta
 

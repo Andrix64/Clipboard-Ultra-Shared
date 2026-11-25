@@ -127,7 +127,7 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MemberLeaving_KeepsTheGroup_AndHiddenHostWithoutMembersEndsTheSession()
+    public async Task MemberLeaving_KeepsTheGroup_AndHiddenHostStaysOpenWithoutMembers()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
         await host.ShowAsync();
@@ -143,9 +143,9 @@ public sealed class SessionTests : IAsyncLifetime
         await host.Node.SetVisibleAsync(false);
         Assert.Equal(2, host.Node.Session?.Participants.Count);
 
-        // ...e senza membri termina.
+        // ...e senza membri resta aperta (raggiungibile dall'indirizzo) finché l'host non la chiude.
         b.Overlay.Click();
-        await Eventually.TrueAsync(() => host.Node.Session is null, "senza membri e non visibile la sessione termina");
+        await Eventually.TrueAsync(() => host.Node.Session is { Participants.Count: 1 }, "senza membri la sessione resta aperta");
         Assert.False(host.Overlay.IsVisible);
     }
 

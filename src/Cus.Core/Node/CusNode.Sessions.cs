@@ -70,12 +70,18 @@ public sealed partial class CusNode
             if (visible)
             {
                 _hostSession ??= new HostSession(NewId());
+                _hostSession.Offered = true;
             }
             else
             {
-                rejected.AddRange(_pendingJoins.Values);
-                if (_hostSession is { Members.IsEmpty: true })
-                    _hostSession = null;
+                // Non più annunciato, ma la sessione resta aperta: chi inserisce a mano l'indirizzo può
+                // ancora chiedere di entrare. Si chiude solo con "chiudi sessione" (o entrando altrove).
+                if (fromJoin)
+                {
+                    rejected.AddRange(_pendingJoins.Values);
+                    if (_hostSession is { Members.IsEmpty: true })
+                        _hostSession = null;
+                }
             }
 
             RaiseSessionChanged();
@@ -153,14 +159,14 @@ public sealed partial class CusNode
                 catch
                 {
                     // Risposta non inviata: una sessione creata apposta e rimasta vuota non resta in giro.
-                    if (!_visible && _hostSession is { Members.IsEmpty: true })
+                    if (_hostSession is { Offered: false, Members.IsEmpty: true })
                         _hostSession = null;
                     throw;
                 }
 
                 viaAgreement = true;
             }
-            else if (!_visible)
+            else if (_hostSession is not { Offered: true })
             {
                 reason = $"{Identity.DisplayName} non si sta offrendo come host";
             }
@@ -684,7 +690,7 @@ public sealed partial class CusNode
                 // dati ai membri di prima.
                 if (session.Members.IsEmpty)
                 {
-                    _hostSession = _visible ? new HostSession(NewId()) : null;
+                    _hostSession = session.Offered ? new HostSession(NewId()) { Offered = true } : null;
                     Log("Nessun membro rimasto: sessione terminata.");
                 }
 
@@ -743,7 +749,7 @@ public sealed partial class CusNode
 
             // Chi entra in una sessione altrui smette di offrirsi.
             if (_visible)
-                await SetVisibleAsync(false);
+                await SetVisibleAsync(false, fromJoin: true);
 
             var connection = await ConnectAsync(host, port, cancellationToken);
             var remote = connection.Remote;
@@ -1301,6 +1307,9 @@ public sealed partial class CusNode
         private const int MaxItemOrigins = 256;
 
         public string Id { get; } = id;
+
+        /// <summary>L'utente si è offerto come host: la sessione resta aperta anche quando smette di annunciarsi.</summary>
+        public bool Offered { get; set; }
 
         public ConcurrentDictionary<string, Member> Members { get; } = new();
 

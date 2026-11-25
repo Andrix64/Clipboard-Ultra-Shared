@@ -55,7 +55,7 @@ public sealed class VisibilityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Hiding_KeepsTheSession_AndAnEmptyHiddenSessionEnds()
+    public async Task Hiding_KeepsTheSessionOpen_ForThoseWhoTypeTheAddress()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
         await andrea.ShowAsync();
@@ -68,16 +68,17 @@ public sealed class VisibilityTests : IAsyncLifetime
         andrea.Copy("dopo essersi nascosto");
         await Eventually.TrueAsync(() => luca.Text == "dopo essersi nascosto", "la sessione continua");
 
+        // Non più annunciato, ma chi inserisce l'indirizzo a mano può ancora entrare.
         var marco = await Start("marco");
-        await Assert.ThrowsAsync<CusOperationException>(() => marco.JoinAsync(andrea));
+        Assert.Equal(JoinOutcome.Accepted, (await marco.JoinAsync(andrea)).Outcome);
 
         await luca.Node.LeaveSessionAsync();
-        await Eventually.TrueAsync(() => andrea.Node.Session is null, "nascosto e senza membri: sessione finita");
+        await marco.Node.LeaveSessionAsync();
+        await Eventually.TrueAsync(() => andrea.Node.Session is { Participants.Count: 1 }, "senza membri la sessione resta aperta");
+        Assert.False(andrea.Node.Session!.IsVisible);
 
-        // Visibile e vuoto, poi nascosto: niente sessione.
-        await andrea.ShowAsync();
-        Assert.NotNull(andrea.Node.Session);
-        await andrea.Node.SetVisibleAsync(false);
+        // Solo chiuderla la termina.
+        await andrea.Node.LeaveSessionAsync();
         Assert.Null(andrea.Node.Session);
     }
 
@@ -103,7 +104,7 @@ public sealed class VisibilityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Hiding_RejectsPendingRequests()
+    public async Task Hiding_KeepsPendingRequestsAnswerable()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
         await andrea.ShowAsync();
@@ -113,9 +114,9 @@ public sealed class VisibilityTests : IAsyncLifetime
         await Eventually.TrueAsync(() => andrea.Node.JoinRequests.Count == 1, "richiesta in elenco");
         await andrea.Node.SetVisibleAsync(false);
 
-        var result = await join;
-        Assert.Equal(JoinOutcome.Rejected, result.Outcome);
-        Assert.Contains("smesso di offrirsi", result.Reason);
+        var request = Assert.Single(andrea.Node.JoinRequests);
+        Assert.True(andrea.Node.AnswerJoinRequest(request.RequestId, ConsentDecision.Accept));
+        Assert.Equal(JoinOutcome.Accepted, (await join).Outcome);
     }
 
     [Fact]
