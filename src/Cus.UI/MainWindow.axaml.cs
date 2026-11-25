@@ -202,7 +202,12 @@ public partial class MainWindow : Window
 
         _rightPages.AddRange([(PageNetworkButton, NetworkPage), (PageFriendsButton, FriendsPage)]);
         PageNetworkButton.Click += (_, _) => ShowNetworkOrSession();
-        PageFriendsButton.Click += (_, _) => ShowPage(_rightPages, FriendsPage);
+        PageFriendsButton.Click += (_, _) =>
+        {
+            // La pagina sessione non è nella lista delle schede: va nascosta a mano, altrimenti si sovrappone.
+            SessionPage.IsVisible = false;
+            ShowPage(_rightPages, FriendsPage);
+        };
         ShowPage(_rightPages, NetworkPage);
     }
 
@@ -355,7 +360,7 @@ public partial class MainWindow : Window
         PageNetworkButton.Content = session is null ? "RETE" : "SESSIONE";
         VisibleToggle.IsVisible = host;
         VisibleToggle.Classes.Set("active", session?.IsVisible == true);
-        VisibleToggle.Content = session?.IsVisible == true ? "◉ VISIBILE" : "○ NASCOSTO";
+        VisibleToggle.Content = session?.IsVisible == true ? "◉ VISIBILE: SÌ" : "○ VISIBILE: NO";
         SensitiveToggle.IsVisible = host && session!.IsSharing;
         SensitiveToggle.Classes.Set("active", session?.SensitiveForAll == true);
         LeaveButton.Content = host ? "■ CHIUDI SESSIONE" : "■ ESCI";

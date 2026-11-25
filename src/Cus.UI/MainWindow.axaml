@@ -111,12 +111,13 @@
             <!-- In sessione: richieste, connessi e permessi -->
             <DockPanel x:Name="SessionPage" IsVisible="False">
               <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button x:Name="VisibleToggle" Classes="pill page" Content="◉ VISIBILE" Margin="0,0,5,5"
+                <Button x:Name="VisibleToggle" Classes="pill page" Content="◉ VISIBILE: SÌ" Margin="0,0,5,5"
                         ToolTip.Tip="Acceso: gli altri ti vedono e possono chiedere di entrare. Spento: nessun altro può chiedere (chi è dentro resta)." />
                 <Button x:Name="SensitiveToggle" Classes="pill page" Content="••• PASSWORD A TUTTI" Margin="0,0,5,5"
                         ToolTip.Tip="Solo per questa sessione: le password che copi arrivano a tutti. Spento: solo agli amici affidabili." />
                 <Button x:Name="TransfersButton" Classes="pill" Content="⇅ TRASFERIMENTI" Margin="0,0,5,5" IsVisible="False" />
-                <Button x:Name="LeaveButton" Classes="pill" Content="■ CHIUDI" Margin="0,0,5,5" />
+                <Button x:Name="LeaveButton" Classes="pill danger" Content="■ CHIUDI SESSIONE" Margin="0,0,5,5"
+                        ToolTip.Tip="Termina la sessione per tutti i connessi." />
               </WrapPanel>
               <ScrollViewer>
                 <StackPanel Spacing="4">

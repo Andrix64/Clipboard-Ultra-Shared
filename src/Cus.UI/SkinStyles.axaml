@@ -143,6 +143,18 @@
     <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
   </Style>
 
+  <!-- Azione distruttiva (chiudi/esci): rossa, per non confonderla con gli interruttori -->
+  <Style Selector="Button.pill.danger /template/ Border#Body">
+    <Setter Property="Background" Value="#5A1A10" />
+    <Setter Property="BorderBrush" Value="{x:Static ui:Skin.AlertBrush}" />
+  </Style>
+  <Style Selector="Button.pill.danger">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.AlertBrush}" />
+  </Style>
+  <Style Selector="Button.pill.danger:pointerover /template/ Border#Body">
+    <Setter Property="Background" Value="#7A2415" />
+  </Style>
+
   <!-- Liste e campi in stile LCD spento -->
   <Style Selector="ListBox.lcd">
     <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />
