@@ -29,11 +29,15 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         var name = DisplayText.Sanitize(request.RequesterName, MaxNameLength);
         var user = DisplayText.Sanitize(request.RequesterUserName, MaxNameLength);
         var fingerprint = DisplayText.Sanitize(request.RequesterFingerprint, 128, "(impronta non disponibile)");
+        // Un nome uguale a quello di un amico non lo rende un amico: lo si dice prima di tutto il resto.
+        var warning = request.LooksLikeFriend is { } imitated
+            ? $"ATTENZIONE: non è il tuo amico {DisplayText.Sanitize(imitated, MaxNameLength)}, anche se si chiama come lui: è un altro PC. "
+            : "";
         return Show(
             "CUS — richiesta di ingresso",
-            "RICHIESTA DI INGRESSO",
+            request.LooksLikeFriend is null ? "RICHIESTA DI INGRESSO" : "⚠ RICHIESTA DI INGRESSO · NOME DI UN AMICO",
             $"{name} chiede di entrare nella tua condivisione.",
-            "Chi entra riceve ciò che si copia nella sessione. In bidirezionale anche ciò che copia lui arriva a tutti; "
+            warning + "Chi entra riceve ciò che si copia nella sessione. In bidirezionale anche ciò che copia lui arriva a tutti; "
                 + "in sola lettura le sue copie restano sul suo PC. Potrai cambiarlo dall'elenco dei connessi.",
             user,
             fingerprint,

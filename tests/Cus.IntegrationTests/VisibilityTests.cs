@@ -19,14 +19,14 @@ public sealed class VisibilityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HostNotVisible_RejectsJoin_WithoutAsking()
+    public async Task HostNotVisible_RefusesStrangers_WithoutAskingOrSayingWhoItIs()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
 
-        var result = await luca.JoinAsync(andrea);
+        var error = await Assert.ThrowsAsync<CusOperationException>(() => luca.JoinAsync(andrea));
 
-        Assert.Equal(JoinOutcome.Rejected, result.Outcome);
-        Assert.Contains("non si sta offrendo", result.Reason);
+        Assert.Contains("non accetta connessioni", error.Message);
+        Assert.DoesNotContain("andrea", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(andrea.Consent.Requests);
         Assert.Null(andrea.Node.Session);
         Assert.Null(luca.Node.Session);
@@ -69,7 +69,7 @@ public sealed class VisibilityTests : IAsyncLifetime
         await Eventually.TrueAsync(() => luca.Text == "dopo essersi nascosto", "la sessione continua");
 
         var marco = await Start("marco");
-        Assert.Equal(JoinOutcome.Rejected, (await marco.JoinAsync(andrea)).Outcome);
+        await Assert.ThrowsAsync<CusOperationException>(() => marco.JoinAsync(andrea));
 
         await luca.Node.LeaveSessionAsync();
         await Eventually.TrueAsync(() => andrea.Node.Session is null, "nascosto e senza membri: sessione finita");

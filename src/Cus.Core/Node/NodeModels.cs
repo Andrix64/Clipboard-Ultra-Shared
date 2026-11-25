@@ -2,6 +2,7 @@ using System.Net;
 using Cus.Core.Abstractions;
 using Cus.Core.Friends;
 using Cus.Core.Hosting;
+using Cus.Core.Identity;
 
 namespace Cus.Core.Node;
 
@@ -37,6 +38,10 @@ public sealed record CusNodeOptions
 /// </summary>
 /// <param name="Participants">Persone nella sessione dell'host annunciato (lui compreso); 0 se non annunciato.</param>
 /// <param name="IsAnnounced">Si sta offrendo come host adesso (annuncio in rete).</param>
+/// <param name="LooksLikeFriend">
+/// Non è un amico ma si chiama come uno (a occhio): il nome dell'amico imitato. Gli annunci non sono
+/// autenticati, quindi il nome può essere scelto apposta per farsi scambiare per lui.
+/// </param>
 public sealed record PeerView(
     string? DeviceId,
     string DisplayName,
@@ -46,9 +51,13 @@ public sealed record PeerView(
     int Participants,
     bool IsAnnounced,
     AgreementLevel Agreement,
-    bool IsManual)
+    bool IsManual,
+    string? LooksLikeFriend = null)
 {
     public string Address => new PeerEndpoint(Host, Port).ToString();
+
+    /// <summary>Impronta dell'ID annunciato: alla connessione si verifica che il PC sia davvero quello.</summary>
+    public string? Fingerprint => DeviceId is { Length: > 0 } id ? DeviceIdentity.FingerprintOf(id) : null;
 
     /// <summary>Si può chiedere di entrare: host visibile, amico con patto "in qualsiasi momento" o indirizzo a mano.</summary>
     public bool CanJoin => IsAnnounced || IsManual || Agreement == AgreementLevel.Anytime;
@@ -78,7 +87,9 @@ public sealed record SessionView(
 }
 
 /// <summary>Richiesta di ingresso in attesa della decisione dell'host.</summary>
-public sealed record JoinRequestView(string RequestId, string DeviceId, string DisplayName, string UserName, string Fingerprint, DateTimeOffset ReceivedUtc);
+/// <param name="LooksLikeFriend">Chi chiede non è un amico ma si chiama come uno: il nome dell'amico imitato.</param>
+public sealed record JoinRequestView(
+    string RequestId, string DeviceId, string DisplayName, string UserName, string Fingerprint, DateTimeOffset ReceivedUtc, string? LooksLikeFriend = null);
 
 public enum JoinOutcome
 {

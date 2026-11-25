@@ -156,7 +156,12 @@ public sealed class FriendTests : IAsyncLifetime
         await luca.RestartAsync();
         Assert.Equal(AgreementLevel.Anytime, luca.Node.Friends.AgreementWith(andrea.Node.Identity.DeviceId));
 
-        // Luca prova a usare il patto: lo scambio iniziale lo fa cadere anche da lui.
+        // Andrea è nascosta e per lei luca non è più un amico: non gli si presenta nemmeno.
+        await Assert.ThrowsAsync<CusOperationException>(() => luca.JoinAsync(andrea));
+
+        // Appena andrea torna visibile, il primo collegamento fa cadere il patto anche da luca.
+        await andrea.ShowAsync();
+        andrea.Consent.Decision = ConsentDecision.Reject;
         var result = await luca.JoinAsync(andrea);
 
         Assert.Equal(JoinOutcome.Rejected, result.Outcome);
@@ -241,6 +246,37 @@ public sealed class FriendTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StrangerWithAFriendsName_IsFlagged_OnBothSides()
+    {
+        var (andrea, luca) = await StartSessionAsync();
+        Assert.True(await andrea.Node.ProposeAgreementAsync(luca.Node.Identity.DeviceId, AgreementLevel.AutoJoin));
+        await Eventually.TrueAsync(() => luca.Node.Friends.AgreementWith(andrea.Node.Identity.DeviceId) == AgreementLevel.AutoJoin, "luca salva il patto");
+        await luca.Node.LeaveSessionAsync();
+
+        // Lato host: uno sconosciuto si chiama "luca" con una "а" cirillica.
+        andrea.Consent.Delay = TimeSpan.FromSeconds(30);
+        var fakeLuca = await Start("finto-luca", displayName: "lucа");
+        var join = fakeLuca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.JoinRequests.Count == 1, "richiesta in elenco");
+        Assert.Equal("luca", andrea.Node.JoinRequests[0].LooksLikeFriend);
+        await Eventually.TrueAsync(() => andrea.Consent.Requests.Count == 2, "finestra di consenso");
+        Assert.Null(andrea.Consent.Requests.First().LooksLikeFriend);
+        Assert.Equal("luca", andrea.Consent.Requests.Last().LooksLikeFriend);
+        andrea.Node.AnswerJoinRequest(andrea.Node.JoinRequests[0].RequestId, ConsentDecision.Reject);
+        await join;
+
+        // Lato di chi entra: un host che si chiama come un amico, ma non lo è.
+        var fakeAndrea = await Start("finta-andrea", displayName: "Andrеa");
+        await fakeAndrea.ShowAsync();
+        await luca.JoinAsync(fakeAndrea);
+        Assert.Contains(luca.Notifier.Errors, m => m.Contains("non è il tuo amico andrea", StringComparison.Ordinal));
+
+        // Il vero amico non viene segnalato.
+        Assert.Null(luca.Node.Friends.Get(fakeAndrea.Node.Identity.DeviceId));
+        Assert.DoesNotContain(andrea.Notifier.Errors, m => m.Contains("non è il tuo amico", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ManualPeers_AppearInTheList_UntilRemoved()
     {
         var andrea = await Start("andrea");
@@ -267,9 +303,9 @@ public sealed class FriendTests : IAsyncLifetime
         return (andrea, luca);
     }
 
-    private async Task<TestNode> Start(string name, CusNodeOptions? options = null)
+    private async Task<TestNode> Start(string name, CusNodeOptions? options = null, string? displayName = null)
     {
-        var node = await TestNode.StartAsync(_root.Path, name, options);
+        var node = await TestNode.StartAsync(_root.Path, name, options, displayName);
         _nodes.Add(node);
         return node;
     }

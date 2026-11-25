@@ -19,6 +19,24 @@ public static class ClipboardFileNames
 
     public const int MaxSegmentLength = 255;
 
+    /// <summary>
+    /// Dimensione totale dichiarata, massimo 1 TiB. La dichiara chi copia e Esplora risorse la usa per
+    /// preparare la copia: un valore assurdo non deve arrivarci.
+    /// </summary>
+    public const long MaxTotalBytes = 1L << 40;
+
+    /// <summary>
+    /// Estensioni che avviano codice all'apertura (programmi, script, collegamenti, installer, macro,
+    /// immagini disco). Si avvisa chi le riceve: il nome lo sceglie chi le manda.
+    /// </summary>
+    private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js", ".jse",
+        ".wsf", ".wsh", ".hta", ".msi", ".msp", ".mst", ".msix", ".msixbundle", ".appx", ".appxbundle", ".appref-ms",
+        ".application", ".lnk", ".url", ".scf", ".cpl", ".dll", ".sys", ".inf", ".reg", ".jar", ".iso", ".img",
+        ".vhd", ".vhdx", ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppam", ".chm", ".settingcontent-ms",
+    };
+
     /// <summary>Lunghezza massima del percorso relativo: cFileName di FILEDESCRIPTORW è MAX_PATH (260) con il terminatore.</summary>
     public const int MaxPathLength = 259;
 
@@ -45,6 +63,7 @@ public static class ClipboardFileNames
             return false;
         }
 
+        var totalBytes = 0L;
         var filePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
@@ -55,11 +74,15 @@ public static class ClipboardFileNames
                 return false;
             }
 
-            if (file.SizeBytes < 0)
+            if (file.SizeBytes < 0 || file.SizeBytes > MaxTotalBytes - totalBytes)
             {
-                reason = $"dimensione non valida per '{file.Name}'";
+                reason = file.SizeBytes < 0
+                    ? $"dimensione non valida per '{DisplayText.Sanitize(file.Name, 80, "?")}'"
+                    : $"dimensione totale dichiarata troppo grande (oltre {MaxTotalBytes / (1L << 30):N0} GB)";
                 return false;
             }
+
+            totalBytes += file.SizeBytes;
 
             if (directories.Contains(file.Name) || !filePaths.Add(file.Name))
             {
@@ -88,6 +111,17 @@ public static class ClipboardFileNames
 
         return true;
     }
+
+    /// <summary>
+    /// I file dell'elenco che avviano codice all'apertura (vedi <see cref="ExecutableExtensions"/>),
+    /// solo il nome finale. Vuoto se non ce ne sono.
+    /// </summary>
+    public static IReadOnlyList<string> ExecutableNames(IReadOnlyList<ClipboardFileInfo>? files) =>
+        files is null
+            ? []
+            : files.Select(f => f.Name[(f.Name.LastIndexOf('/') + 1)..])
+                .Where(n => ExecutableExtensions.Contains(Path.GetExtension(n)))
+                .ToList();
 
     /// <summary>Un nome relativo con '/' come separatore, senza componenti pericolose.</summary>
     public static bool TryValidateName(string? name, out string reason)

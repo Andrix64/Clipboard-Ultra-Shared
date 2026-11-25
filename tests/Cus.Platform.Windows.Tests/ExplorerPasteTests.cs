@@ -32,6 +32,13 @@ public sealed class ExplorerPasteTests : IDisposable
         Assert.Equal(PatternSource.Expected(0, 3_000_000), await File.ReadAllBytesAsync(big));
         Assert.Equal(PatternSource.Expected(1, 10), await File.ReadAllBytesAsync(small));
         Assert.True(source.Reads >= 3);
+
+        // Arrivano da un altro PC: Esplora risorse li marca come scaricati (Mark-of-the-Web, zona Internet).
+        foreach (var pasted in new[] { big, small })
+        {
+            var zone = await File.ReadAllTextAsync(pasted + ":Zone.Identifier");
+            Assert.Contains("ZoneId=3", zone);
+        }
     }
 
     public void Dispose()

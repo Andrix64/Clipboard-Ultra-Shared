@@ -27,6 +27,9 @@ internal sealed class VirtualFileDataObject : ComIDataObject
     private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
     private const int FileDescriptorSize = 592;
 
+    /// <summary>URLZONE_INTERNET.</summary>
+    private const uint UrlZoneInternet = 3;
+
     private readonly IReadOnlyList<Entry> _entries;
     private readonly IRemoteFileSource _source;
     private readonly ClipboardFormats _formats;
@@ -82,6 +85,14 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         if (cf == _formats.OwnWriteMarker && (format.tymed & TYMED.TYMED_HGLOBAL) != 0)
         {
             medium = HGlobal([1]);
+            return;
+        }
+
+        // File arrivati da un altro PC: zona Internet. Esplora risorse aggiunge il Mark-of-the-Web, e un
+        // eseguibile ricevuto passa dal controllo di SmartScreen come uno scaricato.
+        if (cf == _formats.ZoneIdentifier && (format.tymed & TYMED.TYMED_HGLOBAL) != 0)
+        {
+            medium = HGlobal(BitConverter.GetBytes(UrlZoneInternet));
             return;
         }
 
@@ -193,7 +204,7 @@ internal sealed class VirtualFileDataObject : ComIDataObject
     }
 
     private ushort[] SupportedHGlobalFormats() =>
-        [_formats.FileGroupDescriptor, _formats.PreferredDropEffect, _formats.OwnWriteMarker, _formats.CanIncludeInHistory, _formats.CanUploadToCloud];
+        [_formats.FileGroupDescriptor, _formats.PreferredDropEffect, _formats.OwnWriteMarker, _formats.CanIncludeInHistory, _formats.CanUploadToCloud, _formats.ZoneIdentifier];
 
     private static STGMEDIUM HGlobal(ReadOnlySpan<byte> data) => new()
     {

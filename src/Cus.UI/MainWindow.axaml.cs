@@ -263,7 +263,7 @@ public partial class MainWindow : Window
         if (_model.Node is not { } node)
             return;
         var peers = node.Peers;
-        var signature = string.Join("\n", peers.Select(p => $"{p.DeviceId}|{p.DisplayName}|{p.Address}|{p.Participants}|{p.IsAnnounced}|{p.Agreement}|{p.IsManual}"));
+        var signature = string.Join("\n", peers.Select(p => $"{p.DeviceId}|{p.DisplayName}|{p.Address}|{p.Participants}|{p.IsAnnounced}|{p.Agreement}|{p.IsManual}|{p.LooksLikeFriend}"));
         if (signature == _peersSignature)
             return;
         _peersSignature = signature;
@@ -281,14 +281,30 @@ public partial class MainWindow : Window
             var detail = peer.IsAnnounced
                 ? (peer.Participants <= 1 ? "libero, si offre come host" : $"{peer.Participants} persone in sessione")
                 : peer.IsManual ? "indirizzo salvato" : "amico, non visibile ora";
-            var badges = (peer.Agreement switch { AgreementLevel.Anytime => "∞ ", AgreementLevel.AutoJoin => "⤵ ", _ => "" })
+            var badges = (peer.LooksLikeFriend is not null ? "⚠ " : "")
+                + (peer.Agreement switch { AgreementLevel.Anytime => "∞ ", AgreementLevel.AutoJoin => "⤵ ", _ => "" })
                 + (peer.DeviceId is { } id && node.Friends.TrustsWithSensitive(id) ? "••• " : "");
+
+            // Gli annunci non sono autenticati: per chi non è un amico conta l'impronta (verificata alla
+            // connessione), non il nome, e un nome uguale a quello di un amico si segnala.
+            if (peer.LooksLikeFriend is { } imitated)
+                detail = $"NON è il tuo amico {imitated}: stesso nome, altro PC";
+            if (peer.Agreement == AgreementLevel.None && peer.Fingerprint is { } fingerprint)
+                detail += $" · impronta {fingerprint}";
 
             var buttons = new List<Control>();
             if (peer.CanJoin)
             {
                 var join = RowButton("ENTRA", peer.Agreement == AgreementLevel.None ? "Chiedi di entrare: l'host decide" : "Entra senza conferma (patto)");
-                join.Click += async (_, _) => await RunFrom(join, () => Join(node, peer.Host, peer.Port, peer.DeviceId));
+                join.Click += async (_, _) => await RunFrom(join, async () =>
+                {
+                    if (peer.LooksLikeFriend is { } friendName && !await ConfirmDialog.ShowAsync(this, "Non è il tuo amico",
+                            $"\"{peer.DisplayName}\" si chiama come il tuo amico {friendName}, ma è un altro PC (impronta {peer.Fingerprint}). "
+                            + "Chiunque in rete può scegliersi un nome: entra solo se sai di chi è.",
+                            "ENTRA COMUNQUE"))
+                        return;
+                    await Join(node, peer.Host, peer.Port, peer.DeviceId);
+                });
                 buttons.Add(join);
             }
 
@@ -376,8 +392,10 @@ public partial class MainWindow : Window
             readOnly.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.AcceptReadOnly);
             reject.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Reject);
             RequestsPanel.Children.Add(Row(
-                $"? {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
-                $"impronta {request.Fingerprint}",
+                $"{(request.LooksLikeFriend is null ? "?" : "⚠")} {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
+                request.LooksLikeFriend is { } imitated
+                    ? $"NON è il tuo amico {imitated}: stesso nome, altro PC · impronta {request.Fingerprint}"
+                    : $"impronta {request.Fingerprint}",
                 highlight: false,
                 [bidirectional, readOnly, reject]));
         }

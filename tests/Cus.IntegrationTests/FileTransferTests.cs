@@ -40,6 +40,23 @@ public sealed class FileTransferTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExecutableFiles_AreFlagged_OnTheReceivingSide()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+
+        andrea.Clipboard.Copy(ClipboardContent.FromFiles(CreateFiles("innocui", ("foto.jpg", 10))));
+        await Eventually.TrueAsync(() => luca.Clipboard.Current?.Files?.Count == 1, "luca riceve la foto");
+        Assert.DoesNotContain(luca.Notifier.Errors, m => m.Contains("avviano programmi", StringComparison.Ordinal));
+
+        // Nei due sensi: anche l'host avvisa quando un membro gli manda un eseguibile.
+        luca.Clipboard.Copy(ClipboardContent.FromFiles(CreateFiles("setup", ("Installa.exe", 10), ("leggimi.txt", 5))));
+        await Eventually.TrueAsync(() => andrea.Notifier.Errors.Any(m => m.Contains("Installa.exe", StringComparison.Ordinal)), "l'host avvisa");
+        Assert.Contains(andrea.Notifier.Errors, m => m.Contains("luca", StringComparison.Ordinal) && !m.Contains("leggimi", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Files_FromMember_ReachOtherMember_ThroughHost()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));

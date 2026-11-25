@@ -107,7 +107,7 @@ public sealed class PeerConnection : IAsyncDisposable
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(HandshakeTimeout);
             await client.ConnectAsync(host, port, timeout.Token);
-            return await HandshakeAsync(client, identity, listenPort, isInitiator: true, timeout.Token);
+            return await HandshakeAsync(client, identity, listenPort, isInitiator: true, revealTo: null, timeout.Token);
         }
         catch
         {
@@ -116,12 +116,18 @@ public sealed class PeerConnection : IAsyncDisposable
         }
     }
 
-    public static async Task<PeerConnection> AcceptAsync(TcpClient client, DeviceIdentity identity, int listenPort, CancellationToken cancellationToken)
+    /// <param name="revealTo">
+    /// Decide, dall'ID verificato di chi si collega, se presentarsi (vedi <see cref="SecureChannel"/>).
+    /// Null: sempre.
+    /// </param>
+    /// <exception cref="HandshakeRefusedException">Questo PC non si è presentato a chi si collegava.</exception>
+    public static async Task<PeerConnection> AcceptAsync(
+        TcpClient client, DeviceIdentity identity, int listenPort, CancellationToken cancellationToken, Func<string, bool>? revealTo = null)
     {
         client.NoDelay = true;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(HandshakeTimeout);
-        return await HandshakeAsync(client, identity, listenPort, isInitiator: false, timeout.Token);
+        return await HandshakeAsync(client, identity, listenPort, isInitiator: false, revealTo, timeout.Token);
     }
 
     /// <summary>Avvia la ricezione continua e i ping. Prima di questo si usa <see cref="ReceiveAsync"/>.</summary>
@@ -266,10 +272,11 @@ public sealed class PeerConnection : IAsyncDisposable
         }
     }
 
-    private static async Task<PeerConnection> HandshakeAsync(TcpClient client, DeviceIdentity identity, int listenPort, bool isInitiator, CancellationToken ct)
+    private static async Task<PeerConnection> HandshakeAsync(
+        TcpClient client, DeviceIdentity identity, int listenPort, bool isInitiator, Func<string, bool>? revealTo, CancellationToken ct)
     {
         var endPoint = client.Client.RemoteEndPoint;
-        var channel = await SecureChannel.EstablishAsync(client.GetStream(), identity, isInitiator, ct);
+        var channel = await SecureChannel.EstablishAsync(client.GetStream(), identity, isInitiator, revealTo, ct);
         try
         {
             await channel.SendAsync(new HelloMessage(identity.DisplayName, identity.UserName, listenPort).Serialize(), ct);

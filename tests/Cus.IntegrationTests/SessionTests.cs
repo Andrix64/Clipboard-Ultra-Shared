@@ -224,16 +224,16 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Join_ToSomeoneAlreadyMemberElsewhere_IsRejected()
+    public async Task Join_ToSomeoneAlreadyMemberElsewhere_IsRefused_WithoutRevealingWhoTheyAre()
     {
         var (a, b, c) = (await Start("a"), await Start("b"), await Start("c"));
         await a.ShowAsync();
         await b.JoinAsync(a);
 
-        var result = await c.JoinAsync(b);
+        // b non si offre e c non è suo amico: b non si presenta nemmeno (il caso con un amico è in FriendTests).
+        var error = await Assert.ThrowsAsync<CusOperationException>(() => c.JoinAsync(b));
 
-        Assert.Equal(JoinOutcome.Rejected, result.Outcome);
-        Assert.Contains("è già in una condivisione", result.Reason);
+        Assert.Contains("non accetta connessioni", error.Message);
         Assert.Null(c.Node.Session);
     }
 

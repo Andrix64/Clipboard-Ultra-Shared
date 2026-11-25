@@ -33,7 +33,11 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 - **Interfaccia:** tre corpi. A sinistra cronologia e impostazioni, al centro la console verde, a destra la ricerca in rete (o, quando ci si offre o si è in sessione, richieste e connessi) e la scheda AMICI.
 - **Fine della sessione e nuovi arrivati (revisione del 2026-11-25):** quando esce l'ultimo membro la sessione finisce anche se l'host resta visibile, e ne parte una nuova, vuota. Chi entra dopo non vede la cronologia dei membri di prima e non eredita il permesso temporaneo per le password. Chi entra a sessione già avviata vede invece la cronologia della sessione in corso.
 - **Richieste insistenti:** dopo una richiesta di ingresso rifiutata, scaduta o annullata, lo stesso dispositivo e lo stesso indirizzo (loopback escluso) aspettano 30 s prima di poter chiedere di nuovo. Chi chiede di entrare mentre si offre come host torna visibile se la richiesta non va a buon fine.
-- **Cosa "nascosto" non nasconde:** da nascosto il PC non si annuncia, ma resta in ascolto per gli amici "in qualsiasi momento". Chi in rete si collega alle porte di CUS vede ancora identità, nome del PC e nome utente di Windows durante il saluto iniziale. Anche gli annunci di "nascosto" non sono autenticati: chiunque in rete può far sparire un host dall'elenco altrui fino al prossimo annuncio.
+- **Nascosto davvero (2026-11-25):** da nascosto il PC non si annuncia e resta in ascolto solo per gli amici con un patto. Nell'handshake (protocollo 2) le identità viaggiano cifrate e chi si collega si presenta per primo, con la firma; un PC nascosto risponde con la propria identità solo a un amico con patto, a tutti gli altri solo "rifiutato". Chi prova le porte capisce che lì c'è CUS, non quale PC né di chi. Resta un limite: gli annunci di "nascosto" non sono autenticati, quindi chiunque in rete può far sparire un host dall'elenco altrui fino al suo prossimo annuncio.
+- **Patto sciolto e PC nascosto:** se un PC scioglie un patto mentre l'altro è spento e poi resta nascosto, l'altro non riesce più a collegarsi (non è più un amico) e il patto cade anche dal suo lato alla prima connessione riuscita: quando il primo torna visibile, o quando è lui a contattare l'altro.
+- **Nomi uguali a quelli di un amico:** chi è un amico lo dice l'ID verificato, mai il nome. Se un PC che non è un amico ha lo stesso nome di uno (a occhio: maiuscole, spazi, accenti, lettere cirilliche e greche simili alle latine, 0/O, 1/l/I), l'elenco lo segnala con ⚠ e chiede conferma prima di entrare, e l'host vede l'avviso nella richiesta di ingresso. Per chi non è un amico l'elenco mostra sempre l'impronta, che la connessione verifica.
+- **File ricevuti:** incollati da Esplora risorse portano il Mark-of-the-Web (zona Internet), quindi SmartScreen e Office li trattano come scaricati. Chi riceve file che avviano programmi (eseguibili, script, collegamenti, installer, documenti con macro, immagini disco) vede un avviso. La dimensione totale dichiarata è limitata a 1 TiB.
+- **Invii dell'host:** ogni membro ha una coda ordinata, svuotata fuori dal lock della sessione. Un membro che non legge più non rallenta gli altri: con la coda piena (64 messaggi o 32 MB) viene scollegato.
 
 ## Due modalità (superato il 2026-11-25)
 
@@ -208,12 +212,7 @@ Fonti: [draft-irtf-cfrg-cpace su Datatracker](https://datatracker.ietf.org/doc/d
 
 ## Questioni aperte
 
-Dalla revisione di sicurezza del 2026-11-25, da decidere:
-
-- **Saluto da nascosto:** chiunque si colleghi alle porte vede identità, nome del PC e nome utente. Per evitarlo, da nascosto il PC dovrebbe presentarsi solo dopo aver riconosciuto un amico, ma serve un cambio del protocollo (chi si collega si presenta per primo).
-- **Nomi falsi in elenco:** gli annunci non sono autenticati, quindi un PC può presentarsi come "PC della reception". Chi entra vede l'impronta solo dopo. Opzioni: chiedere conferma con l'impronta prima di entrare da un non amico, e avvisare se il nome coincide con quello di un amico ma l'ID no.
-- **File ricevuti:** niente Mark-of-the-Web (SmartScreen non interviene) e nessun limite alla dimensione totale dichiarata. Opzioni: avviso sulle estensioni eseguibili e un tetto alla dimensione.
-- **Invii sotto lock:** l'host tiene `_gate` mentre invia ai membri; un membro lento blocca il resto fino a 15 s per invio.
+Nessuna al 2026-11-25. Le quattro emerse dalla revisione di sicurezza (saluto da nascosto, nomi falsi, file ricevuti, invii sotto lock) sono state risolte lo stesso giorno: vedi "Modello del 2026-11-25".
 
 ## Note tecniche iniziali (da validare)
 

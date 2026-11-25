@@ -16,7 +16,8 @@ public enum ConsentDecision
 /// <param name="RequesterName">Nome del dispositivo che chiede di entrare.</param>
 /// <param name="RequesterUserName">Utente dichiarato da chi chiede.</param>
 /// <param name="RequesterFingerprint">Impronta della chiave di chi chiede, da confrontare a voce se serve.</param>
-public sealed record ConsentRequest(string RequesterName, string RequesterUserName, string RequesterFingerprint);
+/// <param name="LooksLikeFriend">Chi chiede non è un amico ma si chiama come uno: il nome dell'amico imitato.</param>
+public sealed record ConsentRequest(string RequesterName, string RequesterUserName, string RequesterFingerprint, string? LooksLikeFriend = null);
 
 /// <summary>L'host propone un patto: vale nei due sensi e uno qualsiasi dei due può scioglierlo.</summary>
 public sealed record AgreementRequest(string HostName, string HostFingerprint, AgreementLevel Level);

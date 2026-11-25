@@ -144,7 +144,8 @@ public sealed partial class CusNode : IAsyncDisposable
                 .Where(d => now - d.Seen < PeerExpiry && d.Announcement.DeviceId != Identity.DeviceId)
                 .Select(d => new PeerView(d.Announcement.DeviceId, d.Announcement.DisplayName, d.Announcement.UserName,
                     d.Announcement.Host, d.Announcement.Port, d.Announcement.Participants, IsAnnounced: true,
-                    friends.TryGetValue(d.Announcement.DeviceId, out var f) ? f.Agreement : AgreementLevel.None, IsManual: false))
+                    friends.TryGetValue(d.Announcement.DeviceId, out var f) ? f.Agreement : AgreementLevel.None, IsManual: false,
+                    f is null ? ImitatedFriend(d.Announcement.DisplayName, friends.Values) : null))
                 .ToList();
             foreach (var friend in friends.Values)
             {
@@ -166,6 +167,17 @@ public sealed partial class CusNode : IAsyncDisposable
                 .ToList();
         }
     }
+
+    /// <summary>
+    /// L'amico di cui un altro dispositivo porta il nome (a occhio: vedi <see cref="DisplayText.LooksAlike"/>), o null.
+    /// Chi è davvero un amico lo dice l'ID verificato, mai il nome.
+    /// </summary>
+    private static string? ImitatedFriend(string displayName, IEnumerable<Friend> friends) =>
+        friends.FirstOrDefault(f => DisplayText.LooksAlike(f.DisplayName, displayName))?.DisplayName;
+
+    /// <summary>Come sopra, per un dispositivo già collegato (ID verificato).</summary>
+    private string? ImitatedFriend(DeviceInfo remote) =>
+        Friends.Get(remote.DeviceId) is null ? ImitatedFriend(remote.DisplayName, Friends.All) : null;
 
     // ================================================================ impostazioni
 
@@ -465,7 +477,7 @@ public sealed partial class CusNode : IAsyncDisposable
         {
             // Assegnata prima della fase iniziale: se questa fallisce la connessione va chiusa (e tolta
             // da _connections), non solo il socket.
-            connection = await PeerConnection.AcceptAsync(client, Identity, Port, _lifetime.Token);
+            connection = await PeerConnection.AcceptAsync(client, Identity, Port, _lifetime.Token, RevealsIdentityTo);
             await SetUpConnectionAsync(connection);
             var first = await connection.ReceiveAsync(FirstMessageTimeout, maxBytes: FirstMessageMaxBytes);
             switch (first)
@@ -488,6 +500,14 @@ public sealed partial class CusNode : IAsyncDisposable
                 client.Dispose();
         }
     }
+
+    /// <summary>
+    /// A chi si collega questo PC dice chi è. Mentre si offre come host, a tutti (deve farsi trovare);
+    /// da nascosto solo agli amici con un patto, che sono gli unici a cui serve raggiungerlo così.
+    /// Gli altri non scoprono nemmeno quale PC c'è a quell'indirizzo (identità, nome, utente).
+    /// </summary>
+    private bool RevealsIdentityTo(string deviceId) =>
+        _visible || Friends.AgreementWith(deviceId) != AgreementLevel.None;
 
     // ================================================================ scoperta
 

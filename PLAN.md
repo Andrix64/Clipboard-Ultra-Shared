@@ -4,7 +4,7 @@
 
 ## Stato al 2026-11-25
 
-Ridisegno del modello (vedi IDEA.md, "Modello del 2026-11-25"). `dotnet build Cus.slnx` senza warning; `dotnet test`: 123 + 70 + 57 = 250 su 250 (dopo la revisione qui sotto). Copertura delle righe di `Cus.Core` e delle piattaforme circa 85% (coverlet); `Cus.UI` e `Cus.App.Windows` non hanno test automatici.
+Ridisegno del modello (vedi IDEA.md, "Modello del 2026-11-25"). `dotnet build Cus.slnx` senza warning; `dotnet test`: 139 + 74 + 57 = 270 (dopo la revisione e le questioni aperte qui sotto). I 57 test Windows sono da rieseguire a schermo sbloccato: usano la clipboard reale, che con lo schermo bloccato non risponde. Copertura delle righe di `Cus.Core` e delle piattaforme circa 85% (coverlet); `Cus.UI` e `Cus.App.Windows` non hanno test automatici.
 
 | Progetto di test | Test | Copre |
 |---|---|---|
@@ -86,7 +86,12 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
 - **Nomi dalla rete:** `DisplayText.Sanitize` toglie anche le lettere che si disegnano vuote (riempitivi Hangul, Braille vuoto) e i segni combinanti oltre due per lettera.
 - **Amici:** `FriendStore.Remove` sotto lo stesso lock di `RememberEndpoint` (un amico rimosso non torna), e notifica solo se c'era.
 - **Trasferimenti:** un pezzo letto due volte non conta doppio e non chiude il trasferimento in anticipo; i conteggi dell'indicatore si aggiornano subito.
-- **Lasciati aperti** (vedi IDEA.md, "Cosa nascosto non nasconde", e le questioni aperte): saluto visibile anche da nascosto, annunci non autenticati, `_gate` tenuto durante gli invii ai membri (al massimo 15 s per invio), nessun Mark-of-the-Web sui file ricevuti, nessun limite alla dimensione totale dichiarata dei file.
+- **Questioni aperte risolte (2026-11-25):**
+  - **handshake versione 2** (`Cus.Core/Net/SecureChannel.cs`): si scambiano prima solo chiavi effimere e da lì tutto è cifrato; chi si collega manda identità e firma (chiavi effimere più la propria identità), chi risponde la verifica e solo dopo decide se presentarsi (`revealTo`). `CusNode.RevealsIdentityTo`: a tutti se visibile, altrimenti solo agli amici con patto. Le versioni 1 e 2 non si parlano;
+  - **nomi falsi:** `DisplayText.Skeleton`/`LooksAlike`, `PeerView.LooksLikeFriend` e `Fingerprint`, `JoinRequestView`/`ConsentRequest.LooksLikeFriend`; conferma prima di entrare in `MainWindow`, avviso nella finestra di consenso, notifica a chi entra;
+  - **file ricevuti:** formato `ZoneIdentifier` (CFSTR_ZONEIDENTIFIER, zona Internet) in `VirtualFileDataObject`; `ClipboardFileNames.MaxTotalBytes` (1 TiB) ed `ExecutableNames`; avviso in `CusNode.WarnAboutExecutables`;
+  - **invii fuori dal lock:** `MemberOutbox` per membro (64 messaggi, 32 MB), riempita sotto `_gate` da `Post` e svuotata da `PumpAsync`;
+  - resta un limite, documentato in IDEA.md: gli annunci (anche quelli di "nascosto") non sono autenticati.
 
 ### Come provare a mano
 

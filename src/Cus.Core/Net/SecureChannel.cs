@@ -5,7 +5,13 @@ using Cus.Core.Identity;
 
 namespace Cus.Core.Net;
 
-public sealed class ProtocolException(string message) : Exception(message);
+public class ProtocolException(string message) : Exception(message);
+
+/// <summary>
+/// Chi risponde non si presenta a questo dispositivo (per esempio è nascosto e non lo riconosce come
+/// amico). Non dice chi è: solo che lì c'è qualcuno che non accetta la connessione.
+/// </summary>
+public sealed class HandshakeRefusedException(string message) : ProtocolException(message);
 
 /// <summary>
 /// Il messaggio non entra in un frame: non è stato inviato e la connessione resta valida.
@@ -13,16 +19,19 @@ public sealed class ProtocolException(string message) : Exception(message);
 public sealed class MessageTooLargeException(string message) : Exception(message);
 
 /// <summary>
-/// Canale cifrato e autenticato sopra uno stream TCP, costruito con libsodium:
+/// Canale cifrato e autenticato sopra uno stream TCP, costruito con libsodium (versione 2 del protocollo):
 /// <list type="number">
-/// <item>ciascuna parte invia una chiave X25519 effimera e la propria chiave d'identità Ed25519;</item>
-/// <item>ciascuna firma con Ed25519 l'hash della trascrizione (chiavi effimere e identità di entrambe, più il ruolo);</item>
-/// <item>le chiavi di sessione vengono da crypto_kx, legate alla trascrizione con BLAKE2b;</item>
-/// <item>i messaggi viaggiano in due secretstream XChaCha20-Poly1305 (uno per direzione), che impediscono
-/// alterazioni, riordini e repliche.</item>
+/// <item>ciascuna parte invia solo una chiave X25519 effimera; le chiavi di sessione vengono da crypto_kx,
+/// legate alle due chiavi effimere con BLAKE2b, e da qui tutto viaggia in due secretstream
+/// XChaCha20-Poly1305 (uno per direzione), che impediscono alterazioni, riordini e repliche;</item>
+/// <item>chi si collega manda per primo, già cifrata, la propria chiave d'identità Ed25519;</item>
+/// <item>chi risponde decide da quella se presentarsi: se no, risponde solo "rifiutato" e chiude, senza
+/// rivelare chi è (un PC nascosto non si fa riconoscere da chi non è suo amico);</item>
+/// <item>se sì, manda la propria identità e la firma della trascrizione (chiavi effimere e identità di
+/// entrambi, più il ruolo); chi si collega la verifica e risponde con la propria firma.</item>
 /// </list>
-/// Il canale garantisce che l'altra parte possieda la chiave privata dell'identità dichiarata;
-/// decidere se fidarsi di quell'identità spetta a chi lo usa.
+/// Le identità non passano mai in chiaro. Il canale garantisce che l'altra parte possieda la chiave
+/// privata dell'identità dichiarata; decidere se fidarsi di quell'identità spetta a chi lo usa.
 /// </summary>
 public sealed class SecureChannel : IAsyncDisposable
 {
@@ -31,10 +40,20 @@ public sealed class SecureChannel : IAsyncDisposable
     /// <summary>Dimensione massima di un messaggio in chiaro (il frame contiene anche il tag di autenticazione).</summary>
     public const int MaxMessageBytes = MaxFrameBytes - Sodium.SecretStreamABytes;
 
-    private const int HelloBytes = 4 + 1 + 32 + 32;
+    /// <summary>Primo frame, in chiaro: magic, versione, chiave effimera. Nessuna identità.</summary>
+    private const int HelloBytes = 4 + 1 + Sodium.KxPublicKeyBytes;
+
+    /// <summary>Presentazione di chi si collega: identità e firma.</summary>
+    private const int ClientAuthBytes = Sodium.SignPublicKeyBytes + Sodium.SignBytes;
+
+    /// <summary>Risposta di chi risponde all'identità di chi si collega: esito, identità, firma.</summary>
+    private const int ResponderAuthBytes = 1 + Sodium.SignPublicKeyBytes + Sodium.SignBytes;
+
+    private const byte Refused = 0;
+    private const byte Accepted = 1;
 
     private static readonly byte[] Magic = "CUS1"u8.ToArray();
-    private const byte Version = 1;
+    private const byte Version = 2;
 
     private readonly Stream _stream;
     private readonly byte[] _sendState;
@@ -57,17 +76,28 @@ public sealed class SecureChannel : IAsyncDisposable
 
     /// <param name="isInitiator">True per chi ha aperto la connessione.</param>
     /// <exception cref="ProtocolException">Handshake non valido o firma sbagliata.</exception>
+    /// <exception cref="HandshakeRefusedException">Chi risponde non si è presentato a questo dispositivo.</exception>
+    public static Task<SecureChannel> EstablishAsync(
+        Stream stream, DeviceIdentity identity, bool isInitiator, CancellationToken cancellationToken) =>
+        EstablishAsync(stream, identity, isInitiator, revealTo: null, cancellationToken);
+
+    /// <param name="revealTo">
+    /// Solo per chi risponde: riceve l'ID di chi si collega (già provato dal canale cifrato, non ancora
+    /// dalla firma) e decide se presentarsi. Null: sempre. Chi si collega si presenta sempre.
+    /// </param>
     public static async Task<SecureChannel> EstablishAsync(
-        Stream stream, DeviceIdentity identity, bool isInitiator, CancellationToken cancellationToken)
+        Stream stream, DeviceIdentity identity, bool isInitiator, Func<string, bool>? revealTo, CancellationToken cancellationToken)
     {
         var (ephemeralPk, ephemeralSk) = Sodium.KxKeyPair();
+        var sendState = new byte[Sodium.SecretStreamStateBytes];
+        var receiveState = new byte[Sodium.SecretStreamStateBytes];
+        var established = false;
         try
         {
             var hello = new byte[HelloBytes];
             Magic.CopyTo(hello, 0);
             hello[4] = Version;
             ephemeralPk.CopyTo(hello, 5);
-            identity.SignPublicKey.CopyTo(hello, 37);
             await WriteFrameAsync(stream, hello, cancellationToken);
 
             // Prima dell'autenticazione si accettano solo frame della dimensione attesa: un header che
@@ -76,35 +106,18 @@ public sealed class SecureChannel : IAsyncDisposable
             if (peerHello.Length != hello.Length || !peerHello.AsSpan(0, 4).SequenceEqual(Magic))
                 throw new ProtocolException("L'altra parte non parla il protocollo CUS.");
             if (peerHello[4] != Version)
-                throw new ProtocolException($"Versione di protocollo non supportata: {peerHello[4]}.");
+                throw new ProtocolException($"Versione di protocollo non supportata: {peerHello[4]} (questa è la {Version}). Aggiorna CUS su entrambi i PC.");
+            var peerEphemeral = peerHello.AsSpan(5, Sodium.KxPublicKeyBytes).ToArray();
 
-            var peerEphemeral = peerHello.AsSpan(5, 32).ToArray();
-            var peerIdentity = peerHello.AsSpan(37, 32).ToArray();
-            if (peerIdentity.AsSpan().SequenceEqual(identity.SignPublicKey))
-                throw new ProtocolException("Connessione verso sé stessi.");
-
-            var (clientEph, serverEph, clientId, serverId) = isInitiator
-                ? (ephemeralPk, peerEphemeral, identity.SignPublicKey, peerIdentity)
-                : (peerEphemeral, ephemeralPk, peerIdentity, identity.SignPublicKey);
-            var transcript = SHA512.HashData([.. "CUS/handshake/v1"u8, .. clientEph, .. serverEph, .. clientId, .. serverId]);
-
-            var ownRole = isInitiator ? (byte)'C' : (byte)'S';
-            var peerRole = isInitiator ? (byte)'S' : (byte)'C';
-            await WriteFrameAsync(stream, identity.Sign(AuthPayload(ownRole, transcript)), cancellationToken);
-            var peerSignature = await ReadFrameAsync(stream, Sodium.SignBytes, cancellationToken);
-            if (!DeviceIdentity.Verify(peerSignature, AuthPayload(peerRole, transcript), peerIdentity))
-                throw new ProtocolException("Firma dell'handshake non valida: l'altra parte non possiede la chiave che dichiara.");
-
+            var (clientEph, serverEph) = isInitiator ? (ephemeralPk, peerEphemeral) : (peerEphemeral, ephemeralPk);
+            var keyContext = SHA512.HashData([.. "CUS/handshake/v2/keys"u8, .. clientEph, .. serverEph]);
             var (rx, tx) = isInitiator
                 ? Sodium.KxClientSessionKeys(ephemeralPk, ephemeralSk, peerEphemeral)
                 : Sodium.KxServerSessionKeys(ephemeralPk, ephemeralSk, peerEphemeral);
-            var sendKey = Sodium.GenericHash(transcript, tx);
-            var receiveKey = Sodium.GenericHash(transcript, rx);
+            var sendKey = Sodium.GenericHash(keyContext, tx);
+            var receiveKey = Sodium.GenericHash(keyContext, rx);
             CryptographicOperations.ZeroMemory(rx);
             CryptographicOperations.ZeroMemory(tx);
-
-            var sendState = new byte[Sodium.SecretStreamStateBytes];
-            var receiveState = new byte[Sodium.SecretStreamStateBytes];
             await WriteFrameAsync(stream, Sodium.SecretStreamInitPush(sendState, sendKey), cancellationToken);
             var peerHeader = await ReadFrameAsync(stream, Sodium.SecretStreamHeaderBytes, cancellationToken);
             if (peerHeader.Length != Sodium.SecretStreamHeaderBytes)
@@ -113,12 +126,79 @@ public sealed class SecureChannel : IAsyncDisposable
             CryptographicOperations.ZeroMemory(sendKey);
             CryptographicOperations.ZeroMemory(receiveKey);
 
+            // Da qui tutto è cifrato. Chi si collega prova per primo la propria identità, firmando le due
+            // chiavi effimere (cioè questa sessione) e la propria chiave: chi risponde decide se
+            // presentarsi solo dopo averla verificata, così dichiarare la chiave pubblica di un amico
+            // non basta a farsi rivelare un PC nascosto. Poi chi risponde firma tutto, identità di chi
+            // si collega compresa: un intermediario non può legare due handshake diversi.
+            var clientTranscript = (byte[] clientId) =>
+                SHA512.HashData([.. "CUS/handshake/v2/client"u8, .. clientEph, .. serverEph, .. clientId]);
+            var serverTranscript = (byte[] clientId, byte[] serverId) =>
+                SHA512.HashData([.. "CUS/handshake/v2/server"u8, .. clientEph, .. serverEph, .. clientId, .. serverId]);
+
+            byte[] peerIdentity;
+            if (isInitiator)
+            {
+                await SendSealedAsync(stream, sendState,
+                    [.. identity.SignPublicKey, .. identity.Sign(AuthPayload((byte)'C', clientTranscript(identity.SignPublicKey)))], cancellationToken);
+                var reply = await ReceiveSealedAsync(stream, receiveState, ResponderAuthBytes, cancellationToken);
+                if (reply is [Refused])
+                    throw new HandshakeRefusedException("L'altro PC non accetta connessioni da questo dispositivo in questo momento.");
+                if (reply.Length != ResponderAuthBytes || reply[0] != Accepted)
+                    throw new ProtocolException("Risposta dell'handshake non valida.");
+                peerIdentity = reply.AsSpan(1, Sodium.SignPublicKeyBytes).ToArray();
+                if (peerIdentity.AsSpan().SequenceEqual(identity.SignPublicKey))
+                    throw new ProtocolException("Connessione verso sé stessi.");
+                var signature = reply.AsSpan(1 + Sodium.SignPublicKeyBytes).ToArray();
+                if (!DeviceIdentity.Verify(signature, AuthPayload((byte)'S', serverTranscript(identity.SignPublicKey, peerIdentity)), peerIdentity))
+                    throw new ProtocolException("Firma dell'handshake non valida: l'altra parte non possiede la chiave che dichiara.");
+            }
+            else
+            {
+                var claim = await ReceiveSealedAsync(stream, receiveState, ClientAuthBytes, cancellationToken);
+                if (claim.Length != ClientAuthBytes)
+                    throw new ProtocolException("Identità dell'handshake non valida.");
+                peerIdentity = claim.AsSpan(0, Sodium.SignPublicKeyBytes).ToArray();
+                if (peerIdentity.AsSpan().SequenceEqual(identity.SignPublicKey))
+                    throw new ProtocolException("Connessione verso sé stessi.");
+                var signature = claim.AsSpan(Sodium.SignPublicKeyBytes).ToArray();
+                if (!DeviceIdentity.Verify(signature, AuthPayload((byte)'C', clientTranscript(peerIdentity)), peerIdentity))
+                    throw new ProtocolException("Firma dell'handshake non valida: l'altra parte non possiede la chiave che dichiara.");
+
+                if (revealTo is not null && !revealTo(DeviceIdentity.ComputeDeviceId(peerIdentity)))
+                {
+                    await SendSealedAsync(stream, sendState, [Refused], cancellationToken);
+                    throw new HandshakeRefusedException("Connessione non accettata: dispositivo sconosciuto mentre questo PC è nascosto.");
+                }
+
+                await SendSealedAsync(stream, sendState,
+                    [Accepted, .. identity.SignPublicKey, .. identity.Sign(AuthPayload((byte)'S', serverTranscript(peerIdentity, identity.SignPublicKey)))],
+                    cancellationToken);
+            }
+
+            established = true;
             return new SecureChannel(stream, peerIdentity, sendState, receiveState);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(ephemeralSk);
+            if (!established)
+            {
+                CryptographicOperations.ZeroMemory(sendState);
+                CryptographicOperations.ZeroMemory(receiveState);
+            }
         }
+    }
+
+    private static async Task SendSealedAsync(Stream stream, byte[] state, byte[] message, CancellationToken cancellationToken) =>
+        await WriteFrameAsync(stream, Sodium.SecretStreamPush(state, message), cancellationToken);
+
+    private static async Task<byte[]> ReceiveSealedAsync(Stream stream, byte[] state, int maxMessageBytes, CancellationToken cancellationToken)
+    {
+        var ciphertext = await ReadFrameAsync(stream, maxMessageBytes + Sodium.SecretStreamABytes, cancellationToken);
+        if (!Sodium.SecretStreamPull(state, ciphertext, out var message))
+            throw new ProtocolException("Messaggio dell'handshake alterato.");
+        return message;
     }
 
     /// <exception cref="MessageTooLargeException">Messaggio oltre <see cref="MaxMessageBytes"/>: non inviato.</exception>

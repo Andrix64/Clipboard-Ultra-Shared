@@ -298,21 +298,36 @@ public sealed class HardeningTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task JoinRequest_ClaimingAnAgreement_IsRejected_WhenTheHostIsNotVisible()
+    public async Task UnknownDevice_CannotEvenCompleteTheHandshake_WithAHiddenHost()
     {
         var host = await Start("host");
+        var evil = DeviceIdentity.Generate("evil", "u");
+
+        await Assert.ThrowsAsync<HandshakeRefusedException>(
+            () => PeerConnection.ConnectAsync("127.0.0.1", host.Node.Port, evil, 0, CancellationToken.None));
+
+        Assert.Empty(host.Consent.Requests);
+        Assert.Null(host.Node.Session);
+        Assert.Empty(host.Node.Friends.All);
+    }
+
+    [Fact]
+    public async Task JoinRequest_ClaimingAnAgreement_IsWorthNothing_TheLowerLevelWins()
+    {
+        var host = await Start("host");
+        await host.ShowAsync();
+        host.Consent.Decision = ConsentDecision.Reject;
         var evil = DeviceIdentity.Generate("evil", "u");
         await using var connection = await PeerConnection.ConnectAsync("127.0.0.1", host.Node.Port, evil, 0, CancellationToken.None);
         await connection.SendAsync(new FriendSyncMessage(AgreementLevel.Anytime));
         Assert.Equal(AgreementLevel.None, (await connection.ReceiveAsync<FriendSyncMessage>(TimeSpan.FromSeconds(5))).Level);
         await connection.SendAsync(new JoinRequestMessage());
-        var reply = await connection.ReceiveAsync<JoinReplyMessage>(TimeSpan.FromSeconds(5));
+        var reply = await connection.ReceiveAsync<JoinReplyMessage>(TimeSpan.FromSeconds(15));
 
-        // Dichiarare un patto che l'host non ha non serve a nulla: vale il livello più basso.
+        // Dichiarare un patto che l'host non ha non fa saltare il consenso.
         Assert.False(reply.Accepted);
-        Assert.Contains("non si sta offrendo", reply.Reason);
-        Assert.Empty(host.Consent.Requests);
-        Assert.Null(host.Node.Session);
+        Assert.Single(host.Consent.Requests);
+        Assert.False(host.Node.Session!.IsSharing);
         Assert.Equal(AgreementLevel.None, host.Node.Friends.AgreementWith(evil.DeviceId));
     }
 
@@ -334,6 +349,34 @@ public sealed class HardeningTests : IAsyncLifetime
         await Assert.ThrowsAnyAsync<Exception>(() => channel.ReceiveAsync(timeout.Token));
         Assert.False(timeout.IsCancellationRequested, "l'host deve chiudere, non restare in attesa");
         Assert.Empty(host.Consent.Requests);
+    }
+
+    [Fact]
+    public async Task MemberThatStopsReading_DoesNotSlowTheOthers_AndIsDisconnected()
+    {
+        var host = await Start("host");
+        var luca = await Start("luca");
+        await host.ShowAsync();
+        Assert.Equal(JoinOutcome.Accepted, (await luca.JoinAsync(host)).Outcome);
+
+        // Un membro che entra e poi non legge più nulla: i buffer TCP verso di lui si riempiono.
+        await using var stuck = await JoinRawAsync(host);
+        await Eventually.TrueAsync(() => host.Node.Session?.Participants.Count == 3, "tre partecipanti");
+
+        var started = Environment.TickCount64;
+        var big = new string('x', 1_900_000);
+        for (var i = 0; i < 40; i++)
+            host.Copy($"{i:D2}{big}");
+
+        // Prima gli invii avvenivano sotto il lock dell'host: ogni copia aspettava il membro bloccato
+        // fino al timeout di invio (15 s). Ora luca le riceve al proprio ritmo.
+        await Eventually.TrueAsync(() => luca.Text?.StartsWith("39", StringComparison.Ordinal) == true, "luca riceve l'ultima copia", timeoutMs: 12_000);
+        Assert.True(Environment.TickCount64 - started < 12_000);
+
+        // Il membro bloccato, con la coda piena, viene scollegato; l'host resta reattivo.
+        await Eventually.TrueAsync(() => host.Node.Session?.Participants.Count == 2, "il membro bloccato esce", timeoutMs: 10_000);
+        await host.Node.SetMemberGrantAsync(luca.Node.Identity.DeviceId, ShareDirection.ReadOnly);
+        await Eventually.TrueAsync(() => luca.Node.Session?.MyGranted == ShareDirection.ReadOnly, "lo stato arriva a luca");
     }
 
     /// <summary>Un "membro" scritto a mano: handshake, livello del patto, richiesta di ingresso.</summary>

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Cus.Core.Abstractions;
 using Cus.Core.Friends;
 using Cus.Core.Hosting;
@@ -285,7 +286,8 @@ public sealed partial class CusNode
         if (_pendingJoins.Count >= MaxPendingJoins)
             return (ConsentDecision.Reject, "troppe richieste in attesa, riprova tra poco");
 
-        var pending = new PendingJoin(new JoinRequestView(NewId(), remote.DeviceId, remote.DisplayName, remote.UserName, remote.Fingerprint, DateTimeOffset.UtcNow));
+        var imitated = ImitatedFriend(remote);
+        var pending = new PendingJoin(new JoinRequestView(NewId(), remote.DeviceId, remote.DisplayName, remote.UserName, remote.Fingerprint, DateTimeOffset.UtcNow, imitated));
         _pendingJoins[pending.View.RequestId] = pending;
         connection.Closed += (_, _) => pending.Decide(ConsentDecision.Reject, "richiesta annullata");
         JoinRequestsChanged?.Invoke(this, EventArgs.Empty);
@@ -302,7 +304,7 @@ public sealed partial class CusNode
                 {
                     try
                     {
-                        var decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint), prompt.Token);
+                        var decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint, imitated), prompt.Token);
                         pending.Decide(decision, decision == ConsentDecision.Reject ? "richiesta rifiutata" : null);
                     }
                     catch (OperationCanceledException)
@@ -346,10 +348,16 @@ public sealed partial class CusNode
     {
         var session = _hostSession!;
         await connection.SendAsync(new JoinReplyMessage(true, session.Id, granted, null));
-        session.Members[connection.Remote.DeviceId] = new Member(connection, granted);
+        var member = new Member(connection, granted);
+        session.Members[connection.Remote.DeviceId] = member;
         connection.MessageHandler = HostHandleMessageAsync;
-        connection.Closed += (c, reason) => RunInBackground(() => OnMemberClosedAsync(c, reason));
+        connection.Closed += (c, reason) =>
+        {
+            member.Outbox.Complete();
+            RunInBackground(() => OnMemberClosedAsync(c, reason));
+        };
         connection.Start();
+        RunInBackground(() => member.Outbox.PumpAsync(connection, Log));
         RaiseSessionChanged();
     }
 
@@ -538,17 +546,26 @@ public sealed partial class CusNode
         await _gate.WaitAsync();
         try
         {
-            var sequence = _hostSession?.Sequence ?? 0;
-            await connection.SendAsync(new ClipboardAckMessage(itemId, sequence));
-        }
-        catch (IOException)
-        {
-            // Membro caduto.
+            if (CurrentMember(connection) is { } member)
+                Post(member, new ClipboardAckMessage(itemId, _hostSession?.Sequence ?? 0));
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Accoda un messaggio per un membro. Sotto _gate: l'ordine delle code è quello in cui l'host decide
+    /// (numeri di sequenza, conferme, stato), e nessun invio in rete tiene il lock. Un membro che non
+    /// smaltisce la sua coda (non legge più, o troppo piano) si scollega invece di rallentare gli altri.
+    /// </summary>
+    private void Post(Member member, CusMessage message, int? bytes = null)
+    {
+        if (member.Outbox.TryEnqueue(message, bytes ?? message.Serialize().Length))
+            return;
+        Log($"{member.Connection.Remote.DisplayName} non riceve le copie abbastanza in fretta: scollegato.");
+        member.Connection.Close("troppo lento a ricevere le copie");
     }
 
     /// <summary>
@@ -585,7 +602,8 @@ public sealed partial class CusNode
                 return -1;
 
             var item = new ClipboardItemMessage(itemId, session.Sequence + 1, originId, originName, content, sensitive);
-            if (originConnection is null && item.Serialize().Length > SecureChannel.MaxMessageBytes)
+            var itemBytes = item.Serialize().Length;
+            if (originConnection is null && itemBytes > SecureChannel.MaxMessageBytes)
             {
                 _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
                 return -1;
@@ -604,6 +622,7 @@ public sealed partial class CusNode
                 {
                     await _writer.WriteAsync(content with { IsMarkedSensitive = sensitive }, source);
                     SetCurrentClipboard(ClipboardSummary.From(content, originId, originName, sensitive, isShared: true));
+                    WarnAboutExecutables(content, originName);
                 }
                 catch (Exception ex)
                 {
@@ -613,14 +632,8 @@ public sealed partial class CusNode
                 }
 
                 acknowledged = true;
-                try
-                {
-                    await originConnection.SendAsync(new ClipboardAckMessage(itemId, sequence));
-                }
-                catch (IOException)
-                {
-                    // Origine caduta.
-                }
+                if (CurrentMember(originConnection) is { } origin)
+                    Post(origin, new ClipboardAckMessage(itemId, sequence));
             }
 
             // Sensibili: le copie dell'host vanno ai membri affidabili (o a tutti col permesso
@@ -632,9 +645,10 @@ public sealed partial class CusNode
                     : sensitiveRecipients?.Contains(m.Connection.Remote.DeviceId) == true))
                 .ToList();
 
-            // Invii in parallelo, ognuno con il proprio timeout (PeerConnection.SendTimeout): un membro
-            // lento non ritarda gli altri e non tiene _gate oltre quel limite.
-            await Task.WhenAll(targets.Select(member => SendItemAsync(member.Connection, item)));
+            // Nelle code dei membri, nell'ordine dei numeri di sequenza: gli invii veri avvengono fuori
+            // da _gate, ognuno al ritmo del proprio membro.
+            foreach (var member in targets)
+                Post(member, item, itemBytes);
             return targets.Count;
         }
         catch (Exception ex)
@@ -644,35 +658,10 @@ public sealed partial class CusNode
         }
         finally
         {
-            if (!acknowledged)
-            {
-                try
-                {
-                    await originConnection!.SendAsync(new ClipboardAckMessage(itemId, _hostSession?.Sequence ?? 0));
-                }
-                catch (Exception ex) when (ex is IOException or OperationCanceledException or TimeoutException)
-                {
-                    // Origine caduta.
-                }
-            }
+            if (!acknowledged && CurrentMember(originConnection!) is { } origin)
+                Post(origin, new ClipboardAckMessage(itemId, _hostSession?.Sequence ?? 0));
 
             _gate.Release();
-        }
-    }
-
-    private async Task SendItemAsync(PeerConnection connection, ClipboardItemMessage item)
-    {
-        try
-        {
-            await connection.SendAsync(item);
-        }
-        catch (IOException)
-        {
-            // Membro caduto (o troppo lento): lo rimuove OnMemberClosedAsync.
-        }
-        catch (MessageTooLargeException)
-        {
-            Log($"Copia non inviata a {connection.Remote.DisplayName}: troppo grande.");
         }
     }
 
@@ -713,31 +702,19 @@ public sealed partial class CusNode
 
     private async Task BroadcastStateAsync()
     {
-        HostSession? session;
-        SessionStateMessage? state;
         await _gate.WaitAsync();
         try
         {
-            session = _hostSession;
-            state = session is null ? null : new SessionStateMessage(session.Id, session.Participants(Identity), session.SensitiveForAll);
+            if (_hostSession is not { } session)
+                return;
+            var state = new SessionStateMessage(session.Id, session.Participants(Identity), session.SensitiveForAll);
+            var bytes = state.Serialize().Length;
+            foreach (var member in session.Members.Values)
+                Post(member, state, bytes);
         }
         finally
         {
             _gate.Release();
-        }
-
-        if (session is null || state is null)
-            return;
-        foreach (var member in session.Members.Values)
-        {
-            try
-            {
-                await member.Connection.SendAsync(state);
-            }
-            catch (IOException)
-            {
-                // Membro caduto.
-            }
         }
     }
 
@@ -778,6 +755,8 @@ public sealed partial class CusNode
                     + "non corrisponde a quella annunciata in rete. Richiesta annullata.");
             }
 
+            if (ImitatedFriend(remote) is { } imitated)
+                _notifier.Error($"Attenzione: {remote.DisplayName} (impronta {remote.Fingerprint}) non è il tuo amico {imitated}, anche se si chiama come lui.");
             Log($"Richiesta di ingresso inviata a {remote.DisplayName} (impronta {remote.Fingerprint}): in attesa della risposta...");
             JoinReplyMessage reply;
             try
@@ -985,6 +964,7 @@ public sealed partial class CusNode
             await _writer.WriteAsync(item.Content with { IsMarkedSensitive = item.Sensitive }, source);
             var originId = item.OriginDeviceId is { Length: 32 } id ? id : connection.Remote.DeviceId;
             SetCurrentClipboard(ClipboardSummary.From(item.Content, originId, originName, item.Sensitive, isShared: true));
+            WarnAboutExecutables(item.Content, originName);
         }
         catch (Exception ex)
         {
@@ -1279,6 +1259,22 @@ public sealed partial class CusNode
             ?? throw new CusOperationException("Voce non più presente nella cronologia.");
     }
 
+    /// <summary>
+    /// File ricevuti che avviano codice all'apertura: lo si dice subito. Esplora risorse li marca come
+    /// scaricati (Mark-of-the-Web), ma il nome e l'icona li sceglie chi li manda.
+    /// </summary>
+    private void WarnAboutExecutables(ClipboardContent content, string originName)
+    {
+        if (content.Kind != ClipboardContentKind.Files)
+            return;
+        var executables = ClipboardFileNames.ExecutableNames(content.Files);
+        if (executables.Count == 0)
+            return;
+        var shown = string.Join(", ", executables.Take(3).Select(n => DisplayText.Sanitize(n, 60, "?")))
+            + (executables.Count > 3 ? $" e altri {executables.Count - 3}" : "");
+        _notifier.Error($"Attenzione: {originName} ha condiviso file che avviano programmi ({shown}). Aprili solo se ti fidi.");
+    }
+
     private static bool IsAcceptableContent(ClipboardContent content, out string reason)
     {
         reason = content.Kind switch
@@ -1350,6 +1346,9 @@ public sealed partial class CusNode
     {
         public PeerConnection Connection { get; } = connection;
 
+        /// <summary>Messaggi dell'host per questo membro, in ordine (vedi <see cref="Post"/>).</summary>
+        public MemberOutbox Outbox { get; } = new();
+
         public DateTimeOffset JoinedUtc { get; } = DateTimeOffset.UtcNow;
 
         /// <summary>Modalità concessa dall'host.</summary>
@@ -1361,6 +1360,66 @@ public sealed partial class CusNode
         public ShareDirection Direction => Granted == ShareDirection.ReadOnly || Chosen == ShareDirection.ReadOnly
             ? ShareDirection.ReadOnly
             : ShareDirection.Bidirectional;
+    }
+
+    /// <summary>
+    /// Coda d'invio verso un membro: si riempie sotto _gate e la svuota un ciclo per membro, fuori dal
+    /// lock. Limitata per numero e per byte: oltre, il membro non tiene il passo e va scollegato.
+    /// </summary>
+    private sealed class MemberOutbox
+    {
+        private const int MaxMessages = 64;
+
+        /// <summary>Qualche copia grande (immagini, testi lunghi) in attesa, non centinaia di MB.</summary>
+        private const long MaxBytes = 32L * 1024 * 1024;
+
+        private readonly Channel<(CusMessage Message, int Bytes)> _queue =
+            Channel.CreateUnbounded<(CusMessage, int)>(new UnboundedChannelOptions { SingleReader = true });
+
+        private int _count;
+        private long _bytes;
+
+        /// <returns>False se la coda è piena (o chiusa): il messaggio non è stato accodato.</returns>
+        public bool TryEnqueue(CusMessage message, int bytes)
+        {
+            var count = Interlocked.Increment(ref _count);
+            var total = Interlocked.Add(ref _bytes, bytes);
+            if ((count <= MaxMessages && total <= MaxBytes) && _queue.Writer.TryWrite((message, bytes)))
+                return true;
+            Interlocked.Decrement(ref _count);
+            Interlocked.Add(ref _bytes, -bytes);
+            return false;
+        }
+
+        public void Complete() => _queue.Writer.TryComplete();
+
+        /// <summary>Invia in ordine finché la connessione vive. Un invio fallito la chiude (PeerConnection).</summary>
+        public async Task PumpAsync(PeerConnection connection, Action<string> log)
+        {
+            try
+            {
+                await foreach (var (message, bytes) in _queue.Reader.ReadAllAsync(connection.Lifetime))
+                {
+                    try
+                    {
+                        await connection.SendAsync(message);
+                    }
+                    catch (MessageTooLargeException)
+                    {
+                        log($"Copia non inviata a {connection.Remote.DisplayName}: troppo grande.");
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _count);
+                        Interlocked.Add(ref _bytes, -bytes);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException)
+            {
+                // Membro caduto o sessione chiusa: lo rimuove OnMemberClosedAsync.
+            }
+        }
     }
 
     private sealed class MemberSession(string id, PeerConnection host, ShareDirection granted)

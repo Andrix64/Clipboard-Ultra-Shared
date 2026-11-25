@@ -97,6 +97,29 @@ public class DisplayTextFormattingTests
         Assert.Equal("a̶̶b", DisplayText.Sanitize(zalgo, 64));
     }
 
+    [Theory]
+    [InlineData("Andrea", "andrea")]
+    [InlineData("PC di Luca", "pc-di-luca")]
+    [InlineData("Andrea", "Andrеa")]
+    [InlineData("Paolo", "Pa0lo")]
+    [InlineData("Ilaria", "llaria")]
+    [InlineData("José", "Jose")]
+    [InlineData("Luca", "Lu​ca")]
+    public void LooksAlike_MatchesNamesThatLookTheSame(string a, string b)
+    {
+        Assert.True(DisplayText.LooksAlike(a, b), $"'{a}' e '{b}' dovrebbero sembrare uguali");
+    }
+
+    [Theory]
+    [InlineData("Andrea", "Andrew")]
+    [InlineData("Luca", "Lucia")]
+    [InlineData("", "")]
+    [InlineData("---", "...")]
+    public void LooksAlike_KeepsDifferentNamesApart(string a, string b)
+    {
+        Assert.False(DisplayText.LooksAlike(a, b));
+    }
+
     [Fact]
     public void Sanitize_CutsAtTheLimit_WithoutSplittingASurrogatePair()
     {

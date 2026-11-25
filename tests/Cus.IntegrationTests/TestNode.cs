@@ -73,17 +73,22 @@ public sealed class TestNode : IAsyncDisposable
     private readonly InMemorySecretStore _secrets;
     private CusDatabase _database;
 
-    private TestNode(string root, string name, InMemorySecretStore secrets, CusNodeOptions options)
+    private TestNode(string root, string name, InMemorySecretStore secrets, CusNodeOptions options, string? displayName)
     {
         _root = root;
         _secrets = secrets;
         Name = name;
+        DisplayName = displayName ?? name;
         Options = options;
         _database = CusDatabase.Open(new ProfileAppPaths(name, root), secrets);
         Node = Create();
     }
 
+    /// <summary>Nome del profilo (cartella e DB).</summary>
     public string Name { get; }
+
+    /// <summary>Nome del dispositivo, come lo vedono gli altri (di solito uguale al profilo).</summary>
+    public string DisplayName { get; }
 
     public CusNodeOptions Options { get; }
 
@@ -101,9 +106,10 @@ public sealed class TestNode : IAsyncDisposable
 
     public string? Text => Clipboard.Current?.Text;
 
-    public static async Task<TestNode> StartAsync(string root, string name, CusNodeOptions? options = null)
+    /// <param name="displayName">Nome del dispositivo, se diverso dal profilo (per esempio con lettere non ASCII).</param>
+    public static async Task<TestNode> StartAsync(string root, string name, CusNodeOptions? options = null, string? displayName = null)
     {
-        var node = new TestNode(root, name, new InMemorySecretStore(), options ?? DefaultOptions());
+        var node = new TestNode(root, name, new InMemorySecretStore(), options ?? DefaultOptions(), displayName);
         await node.Node.StartAsync();
         return node;
     }
@@ -168,7 +174,7 @@ public sealed class TestNode : IAsyncDisposable
         Overlay = new RecordingOverlayIndicator();
         Consent = new ScriptedConsent();
         Notifier = new RecordingNotifier();
-        var identity = CusNode.LoadOrCreateIdentity(_database, Name, "utente-" + Name);
+        var identity = CusNode.LoadOrCreateIdentity(_database, DisplayName, "utente-" + Name);
         return new CusNode(Options, _database, identity, Clipboard, Writer, Overlay, Consent, Notifier);
     }
 }

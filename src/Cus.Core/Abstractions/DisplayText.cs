@@ -70,6 +70,50 @@ public static class DisplayText
     }
 
     /// <summary>
+    /// Lettere di altri alfabeti che si disegnano come lettere latine (e cifre come lettere): due nomi
+    /// che differiscono solo per queste sembrano lo stesso nome.
+    /// </summary>
+    private static readonly Dictionary<char, char> Confusables = new()
+    {
+        // Cirillico
+        ['а'] = 'a', ['в'] = 'b', ['е'] = 'e', ['ё'] = 'e', ['к'] = 'k', ['м'] = 'm', ['н'] = 'h', ['о'] = 'o', ['р'] = 'p',
+        ['с'] = 'c', ['т'] = 't', ['у'] = 'y', ['х'] = 'x', ['і'] = 'i', ['ї'] = 'i', ['ј'] = 'j', ['ѕ'] = 's', ['ԁ'] = 'd', ['һ'] = 'h',
+        // Greco
+        ['α'] = 'a', ['β'] = 'b', ['ε'] = 'e', ['ζ'] = 'z', ['η'] = 'n', ['ι'] = 'i', ['κ'] = 'k', ['μ'] = 'u', ['ν'] = 'v',
+        ['ο'] = 'o', ['ρ'] = 'p', ['τ'] = 't', ['υ'] = 'u', ['χ'] = 'x',
+        // Cifre e lettere che si confondono tra loro
+        ['0'] = 'o', ['1'] = 'l', ['i'] = 'l', ['ı'] = 'l', ['|'] = 'l', ['ɡ'] = 'g',
+    };
+
+    /// <summary>
+    /// Forma "visiva" di un nome: senza differenze di maiuscole, spazi, punteggiatura, segni diacritici
+    /// e lettere di altri alfabeti che sembrano latine. Due nomi con la stessa forma si confondono a occhio.
+    /// </summary>
+    public static string Skeleton(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return "";
+        var normalized = Sanitize(value, 256, "").Normalize(NormalizationForm.FormKD).ToLowerInvariant();
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            var category = CharUnicodeInfo.GetUnicodeCategory(c);
+            if (category is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark || !(char.IsLetterOrDigit(c) || c == '|'))
+                continue;
+            builder.Append(Confusables.TryGetValue(c, out var latin) ? latin : c);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>I due nomi si confondono a occhio (vedi <see cref="Skeleton"/>).</summary>
+    public static bool LooksAlike(string? a, string? b)
+    {
+        var skeleton = Skeleton(a);
+        return skeleton.Length > 0 && skeleton == Skeleton(b);
+    }
+
+    /// <summary>
     /// Accorcia un nome di file con i puntini in mezzo, tenendo sempre visibile l'estensione:
     /// "relazione_finale_molto_lunga_v3.pdf" → "relazione_fi…a_v3.pdf".
     /// </summary>

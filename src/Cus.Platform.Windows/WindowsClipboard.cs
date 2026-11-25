@@ -19,6 +19,12 @@ internal sealed class ClipboardFormats
     public ushort FileContents { get; } = Register("FileContents");
     public ushort PreferredDropEffect { get; } = Register("Preferred DropEffect");
 
+    /// <summary>
+    /// CFSTR_ZONEIDENTIFIER (ShlObj_core.h): zona da cui vengono i FileContents. Esplora risorse la
+    /// scrive nei file creati (Mark-of-the-Web), così SmartScreen e Office li trattano come scaricati.
+    /// </summary>
+    public ushort ZoneIdentifier { get; } = Register("ZoneIdentifier");
+
     private static ushort Register(string name)
     {
         var id = Native.RegisterClipboardFormatW(name);

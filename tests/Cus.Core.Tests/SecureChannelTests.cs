@@ -105,6 +105,66 @@ public class SecureChannelTests
     }
 
     [Fact]
+    public async Task Identities_NeverTravelInClear()
+    {
+        var alice = DeviceIdentity.Generate("alice", "u");
+        var bob = DeviceIdentity.Generate("bob", "u");
+        var (aliceStream, bobStream, wire) = await RecordingBothWaysLoopbackAsync();
+
+        await EstablishAsync(aliceStream, alice, bobStream, bob);
+
+        var captured = wire.ToArray();
+        Assert.False(Contains(captured, alice.SignPublicKey), "la chiave di chi si collega è passata in chiaro");
+        Assert.False(Contains(captured, bob.SignPublicKey), "la chiave di chi risponde è passata in chiaro");
+    }
+
+    [Fact]
+    public async Task Responder_ThatDoesNotReveal_SaysOnlyRefused_AndKeepsItsKeyHidden()
+    {
+        var stranger = DeviceIdentity.Generate("sconosciuto", "u");
+        var hidden = DeviceIdentity.Generate("nascosto", "u");
+        var (strangerStream, hiddenStream, wire) = await RecordingBothWaysLoopbackAsync();
+        string? asked = null;
+
+        var initiator = SecureChannel.EstablishAsync(strangerStream, stranger, isInitiator: true, CancellationToken.None);
+        var responder = SecureChannel.EstablishAsync(hiddenStream, hidden, isInitiator: false, id => { asked = id; return false; }, CancellationToken.None);
+
+        await Assert.ThrowsAsync<HandshakeRefusedException>(() => initiator);
+        await Assert.ThrowsAsync<HandshakeRefusedException>(() => responder);
+        Assert.Equal(stranger.DeviceId, asked);
+        Assert.False(Contains(wire.ToArray(), hidden.SignPublicKey));
+    }
+
+    [Fact]
+    public async Task ClaimingAFriendsKey_WithoutItsPrivateKey_FailsBeforeTheResponderDecides()
+    {
+        var friend = DeviceIdentity.Generate("amico", "u");
+        var hidden = DeviceIdentity.Generate("nascosto", "u");
+        var impostor = new DeviceIdentity("impostore", "u", friend.SignPublicKey, DeviceIdentity.Generate("x", "u").SignSecretKey);
+        var (s1, s2, wire) = await RecordingBothWaysLoopbackAsync();
+        var asked = false;
+
+        // Chi risponde smette di parlare: l'impostore resta in attesa fino al proprio timeout.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var initiator = SecureChannel.EstablishAsync(s1, impostor, isInitiator: true, timeout.Token);
+        var responder = SecureChannel.EstablishAsync(s2, hidden, isInitiator: false, id => { asked = true; return id == friend.DeviceId; }, CancellationToken.None);
+
+        await Assert.ThrowsAsync<ProtocolException>(() => responder);
+        Assert.False(asked);
+        await Assert.ThrowsAnyAsync<Exception>(() => initiator);
+        Assert.False(Contains(wire.ToArray(), hidden.SignPublicKey));
+    }
+
+    private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
+
+    /// <summary>Come <see cref="RecordingLoopbackAsync"/>, ma registra quello che scrivono entrambi i lati.</summary>
+    private static async Task<(Stream, Stream, MemoryStream)> RecordingBothWaysLoopbackAsync()
+    {
+        var (client, server, wire) = await RecordingLoopbackAsync();
+        return (client, new RecordingStream(server, wire), wire);
+    }
+
+    [Fact]
     public void Messages_RoundTripThroughJson()
     {
         CusMessage message = new ClipboardItemMessage("item", 7, "dev", "Andrea", Abstractions.ClipboardContent.FromText("ciao"));

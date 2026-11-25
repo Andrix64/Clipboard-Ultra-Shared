@@ -67,6 +67,34 @@ public class ClipboardFileNamesTests
         Assert.False(ClipboardFileNames.TryValidate(tooMany, out _));
         Assert.True(ClipboardFileNames.TryValidate([new ClipboardFileInfo("x/a.txt", 1), new ClipboardFileInfo("x/b.txt", 1)], out var reason), reason);
     }
+
+    [Fact]
+    public void DeclaredTotalSize_IsCapped_WithoutOverflowing()
+    {
+        Assert.True(ClipboardFileNames.TryValidate([new ClipboardFileInfo("film.mkv", 50L << 30)], out var reason), reason);
+        Assert.True(ClipboardFileNames.TryValidate([new ClipboardFileInfo("disco.img", ClipboardFileNames.MaxTotalBytes)], out reason), reason);
+
+        Assert.False(ClipboardFileNames.TryValidate([new ClipboardFileInfo("enorme.bin", long.MaxValue)], out reason));
+        Assert.Contains("troppo grande", reason);
+        Assert.False(ClipboardFileNames.TryValidate(
+            [new ClipboardFileInfo("a.bin", ClipboardFileNames.MaxTotalBytes), new ClipboardFileInfo("b.bin", 1)], out _));
+        Assert.False(ClipboardFileNames.TryValidate(
+            [new ClipboardFileInfo("a.bin", long.MaxValue / 2 + 1), new ClipboardFileInfo("b.bin", long.MaxValue / 2 + 1)], out _));
+    }
+
+    [Fact]
+    public void ExecutableNames_ListsFilesThatRunCode_ByTheirFinalName()
+    {
+        var files = new[]
+        {
+            new ClipboardFileInfo("foto.jpg", 1), new ClipboardFileInfo("setup/Installa.EXE", 1),
+            new ClipboardFileInfo("fattura.pdf.lnk", 1), new ClipboardFileInfo("conti.xlsm", 1), new ClipboardFileInfo("note.txt", 1),
+        };
+
+        Assert.Equal(["Installa.EXE", "fattura.pdf.lnk", "conti.xlsm"], ClipboardFileNames.ExecutableNames(files));
+        Assert.Empty(ClipboardFileNames.ExecutableNames([new ClipboardFileInfo("relazione.docx", 1)]));
+        Assert.Empty(ClipboardFileNames.ExecutableNames(null));
+    }
 }
 
 public class DisplayTextTests
