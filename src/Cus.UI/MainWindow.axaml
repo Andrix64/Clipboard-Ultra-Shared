@@ -36,7 +36,14 @@
                 </StackPanel>
                 <TextBlock x:Name="HistoryTitle" Classes="engraved" Text="ULTIME 20 COPIE (SUL PC DELL'HOST)" VerticalAlignment="Center" />
               </DockPanel>
-              <ListBox x:Name="HistoryList" Classes="lcd" />
+              <ListBox x:Name="HistoryList" Classes="lcd"
+                       ToolTip.Tip="Doppio clic su una voce per leggerla per intero">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
             </DockPanel>
 
             <ScrollViewer x:Name="SettingsPage" IsVisible="False">
@@ -93,7 +100,7 @@
             <!-- Nessuna sessione: offrirsi come host o cercare in rete -->
             <DockPanel x:Name="NetworkPage">
               <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button x:Name="OfferButton" DockPanel.Dock="Right" Classes="pill" Content="◉ OFFRITI COME HOST"
+                <Button x:Name="OfferButton" DockPanel.Dock="Right" Classes="pill" Content="OFFRITI COME HOST"
                         ToolTip.Tip="Diventi visibile in rete: gli altri possono chiederti di entrare e tu decidi per ognuno." />
                 <TextBlock Classes="engraved" Text="HOST IN RETE" VerticalAlignment="Center" />
               </DockPanel>
@@ -111,12 +118,12 @@
             <!-- In sessione: richieste, connessi e permessi -->
             <DockPanel x:Name="SessionPage" IsVisible="False">
               <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button x:Name="VisibleToggle" Classes="pill page" Content="◉ VISIBILE: SÌ" Margin="0,0,5,5"
+                <Button x:Name="VisibleToggle" Classes="pill page" Content="VISIBILE: SÌ" Margin="0,0,5,5"
                         ToolTip.Tip="Acceso: gli altri ti vedono e possono chiedere di entrare. Spento: nessun altro può chiedere (chi è dentro resta)." />
                 <Button x:Name="SensitiveToggle" Classes="pill page" Content="••• PASSWORD A TUTTI" Margin="0,0,5,5"
                         ToolTip.Tip="Solo per questa sessione: le password che copi arrivano a tutti. Spento: solo agli amici affidabili." />
-                <Button x:Name="TransfersButton" Classes="pill" Content="⇅ TRASFERIMENTI" Margin="0,0,5,5" IsVisible="False" />
-                <Button x:Name="LeaveButton" Classes="pill danger" Content="■ CHIUDI SESSIONE" Margin="0,0,5,5"
+                <Button x:Name="TransfersButton" Classes="pill" Content="TRASFERIMENTI" Margin="0,0,5,5" IsVisible="False" />
+                <Button x:Name="LeaveButton" Classes="pill danger" Content="CHIUDI SESSIONE" Margin="0,0,5,5"
                         ToolTip.Tip="Termina la sessione per tutti i connessi." />
               </WrapPanel>
               <ScrollViewer>
@@ -131,8 +138,7 @@
 
             <!-- Amici: patti reciproci e fiducia per i contenuti sensibili -->
             <DockPanel x:Name="FriendsPage" IsVisible="False">
-              <TextBlock DockPanel.Dock="Top" Classes="lcd-dark" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
-                         Text="⤵ entra senza conferma · ∞ si collega quando vuole (patti reciproci: se uno li scioglie cadono per entrambi). ••• vede le tue password (solo da questo lato)." />
+              <TextBlock x:Name="FriendsHint" DockPanel.Dock="Top" Classes="lcd-dark" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8" />
               <ScrollViewer>
                 <StackPanel x:Name="FriendsPanel" Spacing="4" />
               </ScrollViewer>
@@ -148,8 +154,8 @@
       <DockPanel>
         <DockPanel x:Name="DragBar" DockPanel.Dock="Top" Background="Transparent" Height="28">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-            <Button x:Name="MinimizeButton" AutomationProperties.Name="Riduci" Classes="round small" Content="–" ToolTip.Tip="Riduci a icona" />
-            <Button x:Name="CloseButton" AutomationProperties.Name="Chiudi" Classes="round small" Content="×" ToolTip.Tip="Chiudi la finestra" />
+            <Button x:Name="MinimizeButton" AutomationProperties.Name="Riduci" Classes="round small" ToolTip.Tip="Riduci a icona" />
+            <Button x:Name="CloseButton" AutomationProperties.Name="Chiudi" Classes="round small" ToolTip.Tip="Chiudi la finestra" />
           </StackPanel>
           <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="CUS" FontSize="22" FontWeight="Black" FontStyle="Italic" Padding="0,0,5,0" Foreground="{x:Static ui:Skin.LimeTextBrush}" />
@@ -177,7 +183,13 @@
           <TextBlock x:Name="StartupErrorText" Classes="lcd-dark" Foreground="{x:Static ui:Skin.AlertBrush}" TextWrapping="Wrap" />
         </Border>
 
-        <ListBox x:Name="ActivityList" Classes="lcd" Margin="0,10,0,0" FontSize="11" />
+        <ListBox x:Name="ActivityList" Classes="lcd" Margin="0,10,0,0" FontSize="11">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="x:String">
+              <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
       </DockPanel>
     </Border>
   </Grid>

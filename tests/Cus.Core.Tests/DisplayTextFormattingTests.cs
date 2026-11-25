@@ -82,6 +82,7 @@ public class DisplayTextFormattingTests
     [InlineData("ㅤㅤ", "(senza nome)")]
     [InlineData("Luㅤca", "Lu ca")]
     [InlineData("⠀", "(senza nome)")]
+    [InlineData("Luca", "Luca")] // uso privato: sono i codici delle icone Font Awesome dell'interfaccia
     [InlineData("  doppi    spazi  ", "doppi spazi")]
     public void Sanitize_RemovesLineBreaksControlsBidiAndBlankLookingLetters(string input, string expected)
     {

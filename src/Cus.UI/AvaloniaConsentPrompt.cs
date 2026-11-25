@@ -35,13 +35,13 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             : "";
         return Show(
             "CUS — richiesta di ingresso",
-            request.LooksLikeFriend is null ? "RICHIESTA DI INGRESSO" : "⚠ RICHIESTA DI INGRESSO · NOME DI UN AMICO",
+            request.LooksLikeFriend is null ? "RICHIESTA DI INGRESSO" : $"{Icons.Warning} RICHIESTA DI INGRESSO · NOME DI UN AMICO",
             $"{name} chiede di entrare nella tua condivisione.",
             warning + "Chi entra riceve ciò che si copia nella sessione. In bidirezionale anche ciò che copia lui arriva a tutti; "
                 + "in sola lettura le sue copie restano sul suo PC. Potrai cambiarlo dall'elenco dei connessi.",
             user,
             fingerprint,
-            [("✕", "rifiuta", ConsentDecision.Reject), ("↓", "sola lettura", ConsentDecision.AcceptReadOnly), ("⇄", "bidirezionale", ConsentDecision.Accept)],
+            [(Icons.Xmark, "rifiuta", ConsentDecision.Reject), (Icons.ArrowDown, "sola lettura", ConsentDecision.AcceptReadOnly), (Icons.Bidirectional, "bidirezionale", ConsentDecision.Accept)],
             ConsentDecision.Reject,
             cancellationToken);
     }
@@ -60,7 +60,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             $"Se accetti, {what}. Il patto vale nei due sensi e cade per entrambi appena uno dei due lo scioglie (scheda AMICI).",
             "",
             fingerprint,
-            [("✕", "rifiuta", false), ("✓", "accetta", true)],
+            [(Icons.Xmark, "rifiuta", false), (Icons.Check, "accetta", true)],
             false,
             cancellationToken);
     }
@@ -130,7 +130,8 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Spacing = 34 };
         foreach (var (glyph, label, value) in choices)
         {
-            var choice = new Button { Content = glyph, FontSize = 18, IsEnabled = false };
+            var choice = new Button { FontSize = 18, IsEnabled = false };
+            Skin.SetContent(choice, glyph);
             choice.Classes.Add("round");
             Avalonia.Automation.AutomationProperties.SetName(choice, label);
             choice.Click += (_, _) =>

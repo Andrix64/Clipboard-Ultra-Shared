@@ -122,7 +122,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         if (state.Transfers > 0)
         {
             var transfers = SmallButton(
-                state.ActiveTransfers > 0 ? $"⇅ {state.ActiveTransfers}" : "⇅",
+                state.ActiveTransfers > 0 ? $"{Icons.Transfers} {state.ActiveTransfers}" : Icons.Transfers,
                 state.ActiveTransfers > 0
                     ? $"{state.ActiveTransfers} copie dei tuoi file in corso: chi le scarica, a che punto sono, annulla"
                     : "Copie dei tuoi file appena concluse");
@@ -134,22 +134,23 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         if (state.CanToggleDirection)
         {
             var readOnly = state.MyDirection == ShareDirection.ReadOnly;
-            var toggle = SmallButton(readOnly ? "↓ SOLA LETTURA" : "⇄ BIDIREZ.",
+            var toggle = SmallButton(readOnly ? $"{Icons.ArrowDown} SOLA LETTURA" : $"{Icons.Bidirectional} BIDIREZ.",
                 readOnly ? "Sei in sola lettura: clic per tornare bidirezionale" : "Clic per passare in sola lettura: le tue copie resteranno qui");
             toggle.Click += (_, _) => DirectionToggleRequested?.Invoke(this, EventArgs.Empty);
             DockPanel.SetDock(toggle, Dock.Right);
             header.Children.Add(toggle);
         }
 
-        header.Children.Add(new TextBlock
+        var title = new TextBlock
         {
-            Text = "● CLIPBOARD CONDIVISA",
             FontFamily = Skin.LcdFont,
             FontSize = 12,
             FontWeight = FontWeight.Bold,
             Foreground = Skin.LimeTextBrush,
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        Skin.SetRich(title, $"{Icons.Clipboard} CLIPBOARD CONDIVISA");
+        header.Children.Add(title);
 
         var content = Skin.Chassis(new StackPanel
         {
@@ -225,6 +226,14 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         foreach (var participant in participants)
         {
             var (glyph, role) = Glyph(participant);
+            var label = new TextBlock
+            {
+                FontFamily = Skin.LcdFont,
+                FontSize = 10.5,
+                FontWeight = participant.IsSelf ? FontWeight.Bold : FontWeight.Normal,
+                Foreground = participant.IsSelf ? Skin.InkBrush : Skin.LimeTextBrush,
+            };
+            Skin.SetRich(label, $"{glyph} {DisplayText.Sanitize(participant.DisplayName, 32)}");
             var chip = new Border
             {
                 CornerRadius = new CornerRadius(4),
@@ -233,14 +242,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
                 Background = participant.IsSelf ? Skin.PillBrush : Skin.DarkLcdBrush,
                 BorderBrush = participant.IsSelf ? Skin.LimeTextBrush : new SolidColorBrush(Color.Parse("#2F4A14")),
                 BorderThickness = new Thickness(1),
-                Child = new TextBlock
-                {
-                    Text = $"{glyph} {DisplayText.Sanitize(participant.DisplayName, 32)}",
-                    FontFamily = Skin.LcdFont,
-                    FontSize = 10.5,
-                    FontWeight = participant.IsSelf ? FontWeight.Bold : FontWeight.Normal,
-                    Foreground = participant.IsSelf ? Skin.InkBrush : Skin.LimeTextBrush,
-                },
+                Child = label,
             };
             ToolTip.SetTip(chip, participant.IsSelf ? $"{role} · sei tu" : role);
             panel.Children.Add(chip);
@@ -249,11 +251,11 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         return panel;
     }
 
-    /// <summary>★ host, ⇄ bidirezionale, ↓ sola lettura (riceve soltanto).</summary>
+    /// <summary>Stella per l'host, frecce per bidirezionale e sola lettura (riceve soltanto).</summary>
     public static (string Glyph, string Role) Glyph(SessionParticipant participant) =>
-        participant.IsHost ? ("★", "host")
-        : participant.Direction == ShareDirection.ReadOnly ? ("↓", participant.Granted == ShareDirection.ReadOnly ? "sola lettura" : "sola lettura (scelta sua)")
-        : ("⇄", "bidirezionale");
+        participant.IsHost ? (Icons.Star, "host")
+        : participant.Direction == ShareDirection.ReadOnly ? (Icons.ArrowDown, participant.Granted == ShareDirection.ReadOnly ? "sola lettura" : "sola lettura (scelta sua)")
+        : (Icons.Bidirectional, "bidirezionale");
 
     private static Button SmallButton(string text, string tip)
     {

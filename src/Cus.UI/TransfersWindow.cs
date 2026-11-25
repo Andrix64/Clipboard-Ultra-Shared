@@ -11,7 +11,7 @@ namespace Cus.UI;
 
 /// <summary>
 /// Copie dei propri file ancora in corso: a chi vanno, a che punto sono, con la possibilità di
-/// annullarle. Si apre dal pulsante ⇅ dell'indicatore o dalla scheda della sessione; una sola alla volta.
+/// annullarle. Si apre dal pulsante dei trasferimenti dell'indicatore o dalla scheda della sessione; una sola alla volta.
 /// </summary>
 public sealed class TransfersWindow : Window
 {
@@ -40,13 +40,17 @@ public sealed class TransfersWindow : Window
         close.Click += (_, _) => Close();
         DockPanel.SetDock(close, Dock.Right);
 
+        var heading = Skin.LcdText($"{Icons.Transfers} TRASFERIMENTI DEI TUOI FILE", 13, bold: true, dark: true);
+        heading.TextWrapping = TextWrapping.NoWrap;
+        heading.VerticalAlignment = VerticalAlignment.Center;
+
         var header = new DockPanel
         {
             Background = Brushes.Transparent,
             Children =
             {
                 close,
-                new TextBlock { Text = "⇅ TRASFERIMENTI DEI TUOI FILE", FontFamily = Skin.LcdFont, FontSize = 13, FontWeight = FontWeight.Bold, Foreground = Skin.LimeTextBrush, VerticalAlignment = VerticalAlignment.Center },
+                heading,
             },
         };
         header.PointerPressed += (_, e) => BeginMoveDrag(e);
@@ -120,7 +124,7 @@ public sealed class TransfersWindow : Window
         var name = Skin.LcdText($"{DisplayText.MiddleEllipsis(DisplayText.Sanitize(transfer.ItemName, 260), 34)}", 12, bold: true, dark: true);
         name.TextWrapping = TextWrapping.NoWrap;
         var detail = Skin.LcdText(
-            $"→ {DisplayText.Sanitize(transfer.RequesterName, 64)} · {DisplayText.FormatSize(transfer.BytesDone)} di {DisplayText.FormatSize(transfer.TotalBytes)} · {state}",
+            $"{Icons.ArrowRight} {DisplayText.Sanitize(transfer.RequesterName, 64)} · {DisplayText.FormatSize(transfer.BytesDone)} di {DisplayText.FormatSize(transfer.TotalBytes)} · {state}",
             11, dark: true);
 
         var bar = new ProgressBar

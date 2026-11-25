@@ -29,7 +29,9 @@ public static class DisplayText
         foreach (var c in value)
         {
             var category = CharUnicodeInfo.GetUnicodeCategory(c);
-            if (category is UnicodeCategory.Format)
+            // Gli "uso privato" sono i codici dei glifi delle icone dell'interfaccia (Font Awesome): un nome
+            // di rete non deve poterli usare per far comparire un'icona in una richiesta di consenso.
+            if (category is UnicodeCategory.Format or UnicodeCategory.PrivateUse)
                 continue;
 
             // Segni combinanti impilati ("zalgo") coprirebbero le righe vicine: al massimo due per lettera.

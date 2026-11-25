@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Cus.Core.Abstractions;
 using Cus.Core.Friends;
 using Cus.Core.Hosting;
@@ -21,6 +22,10 @@ public partial class MainWindow : Window
     private readonly List<HistoryEntry> _history = [];
     private readonly List<(Button Button, Control Page)> _leftPages = [];
     private readonly List<(Button Button, Control Page)> _rightPages = [];
+
+    /// <summary>Testi completi delle righe del display, che lì possono comparire accorciati.</summary>
+    private string _lastActivityFull = "";
+    private string _currentFull = "";
 
     /// <summary>Firma dell'ultimo elenco dei peer disegnato: si ridisegna solo se cambia.</summary>
     private string _peersSignature = "";
@@ -45,8 +50,13 @@ public partial class MainWindow : Window
         _model = model;
         InitializeComponent();
         Title = model.Title;
+        Skin.SetContent(MinimizeButton, Icons.Minus);
+        Skin.SetContent(CloseButton, Icons.Xmark);
+        Skin.SetContent(OfferButton, $"{Icons.Eye} OFFRITI COME HOST");
+        Skin.SetRich(FriendsHint, $"{Icons.SignIn} entra senza conferma · {Icons.Infinity} si collega quando vuole (patti reciproci: se uno li scioglie cadono per entrambi). {Icons.Key} vede le tue password (solo da questo lato).");
         InfoText.Text = string.Join(Environment.NewLine, model.InfoLines);
         WireChrome();
+        WireExpandableTexts();
 
         if (model.StartupError is { } error)
         {
@@ -81,7 +91,7 @@ public partial class MainWindow : Window
         if (model.Notifier is { } notifier)
             notifier.Notified += (message, isError) => AddActivity((isError ? "! " : "") + message);
 
-        LcdDevice.Text = $"▸ {node.Identity.DisplayName}";
+        Skin.SetRich(LcdDevice, $"{Icons.Desktop} {node.Identity.DisplayName}");
         LcdPort.Text = $"PORTA {node.Port}";
         IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA {node.Identity.Info.Fingerprint}";
 
@@ -286,9 +296,9 @@ public partial class MainWindow : Window
             var detail = peer.IsAnnounced
                 ? (peer.Participants <= 1 ? "libero, si offre come host" : $"{peer.Participants} persone in sessione")
                 : peer.IsManual ? "indirizzo salvato" : "amico, non visibile ora";
-            var badges = (peer.LooksLikeFriend is not null ? "⚠ " : "")
-                + (peer.Agreement switch { AgreementLevel.Anytime => "∞ ", AgreementLevel.AutoJoin => "⤵ ", _ => "" })
-                + (peer.DeviceId is { } id && node.Friends.TrustsWithSensitive(id) ? "••• " : "");
+            var badges = (peer.LooksLikeFriend is not null ? $"{Icons.Warning} " : "")
+                + (peer.Agreement switch { AgreementLevel.Anytime => $"{Icons.Infinity} ", AgreementLevel.AutoJoin => $"{Icons.SignIn} ", _ => "" })
+                + (peer.DeviceId is { } id && node.Friends.TrustsWithSensitive(id) ? $"{Icons.Key} " : "");
 
             // Gli annunci non sono autenticati: per chi non è un amico conta l'impronta (verificata alla
             // connessione), non il nome, e un nome uguale a quello di un amico si segnala.
@@ -315,7 +325,7 @@ public partial class MainWindow : Window
 
             if (peer.IsManual)
             {
-                var remove = RowButton("✕", "Togli dall'elenco");
+                var remove = RowButton(Icons.Xmark, "Togli dall'elenco");
                 remove.Click += (_, _) => node.RemoveManualPeer(peer.Address);
                 buttons.Add(remove);
             }
@@ -351,19 +361,19 @@ public partial class MainWindow : Window
             LcdState.Text = session.Role == SessionRole.Host
                 ? (session.IsSharing ? "CONDIVISA · HOST" : "VISIBILE")
                 : session.MyDirection == ShareDirection.ReadOnly ? "SOLA LETTURA" : "CONDIVISA";
-            LcdParticipants.Text = session.IsSharing
-                ? string.Join("  ", session.Participants.Select(p => $"{AvaloniaOverlayIndicator.Glyph(p).Glyph} {p.DisplayName}{(p.IsSelf ? "◂" : "")}"))
-                : session.IsVisible ? "In attesa che qualcuno chieda di entrare..." : "Nessun altro nella sessione";
+            Skin.SetRich(LcdParticipants, session.IsSharing
+                ? string.Join("  ", session.Participants.Select(p => $"{AvaloniaOverlayIndicator.Glyph(p).Glyph} {p.DisplayName}{(p.IsSelf ? Icons.CaretLeft : "")}"))
+                : session.IsVisible ? "In attesa che qualcuno chieda di entrare..." : "Nessun altro nella sessione");
         }
 
         var host = session?.Role == SessionRole.Host;
         PageNetworkButton.Content = session is null ? "RETE" : "SESSIONE";
         VisibleToggle.IsVisible = host;
         VisibleToggle.Classes.Set("active", session?.IsVisible == true);
-        VisibleToggle.Content = session?.IsVisible == true ? "◉ VISIBILE: SÌ" : "○ VISIBILE: NO";
+        Skin.SetContent(VisibleToggle, session?.IsVisible == true ? $"{Icons.Eye} VISIBILE: SÌ" : $"{Icons.EyeSlash} VISIBILE: NO");
         SensitiveToggle.IsVisible = host && session!.IsSharing;
         SensitiveToggle.Classes.Set("active", session?.SensitiveForAll == true);
-        LeaveButton.Content = host ? "■ CHIUDI SESSIONE" : "■ ESCI";
+        Skin.SetContent(LeaveButton, host ? $"{Icons.Stop} CHIUDI SESSIONE" : $"{Icons.Stop} ESCI");
         RequestsTitle.IsVisible = host;
 
         if (!FriendsPageShown)
@@ -390,14 +400,14 @@ public partial class MainWindow : Window
 
         foreach (var request in requests)
         {
-            var bidirectional = RowButton("⇄", "Fai entrare con accesso bidirezionale");
-            var readOnly = RowButton("↓", "Fai entrare in sola lettura");
-            var reject = RowButton("✕", "Rifiuta");
+            var bidirectional = RowButton(Icons.Bidirectional, "Fai entrare con accesso bidirezionale");
+            var readOnly = RowButton(Icons.ArrowDown, "Fai entrare in sola lettura");
+            var reject = RowButton(Icons.Xmark, "Rifiuta");
             bidirectional.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Accept);
             readOnly.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.AcceptReadOnly);
             reject.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Reject);
             RequestsPanel.Children.Add(Row(
-                $"{(request.LooksLikeFriend is null ? "?" : "⚠")} {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
+                $"{(request.LooksLikeFriend is null ? "?" : Icons.Warning)} {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
                 request.LooksLikeFriend is { } imitated
                     ? $"NON è il tuo amico {imitated}: stesso nome, altro PC · impronta {request.Fingerprint}"
                     : $"impronta {request.Fingerprint}",
@@ -425,7 +435,7 @@ public partial class MainWindow : Window
             {
                 // Il membro con accesso bidirezionale passa a sola lettura (e torna) con un tasto.
                 var readOnly = session.MyDirection == ShareDirection.ReadOnly;
-                var toggle = RowButton(readOnly ? "↓" : "⇄", readOnly ? "Sei in sola lettura: torna bidirezionale" : "Passa in sola lettura: le tue copie restano qui");
+                var toggle = RowButton(readOnly ? Icons.ArrowDown : Icons.Bidirectional, readOnly ? "Sei in sola lettura: torna bidirezionale" : "Passa in sola lettura: le tue copie restano qui");
                 toggle.Click += async (_, _) => await RunFrom(toggle, () => node.SetMyDirectionAsync(readOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
                 buttons.Add(toggle);
             }
@@ -436,7 +446,7 @@ public partial class MainWindow : Window
                 {
                     // Un pulsante per membro che alterna bidirezionale e sola lettura.
                     var granted = participant.Granted;
-                    var grant = RowButton(granted == ShareDirection.ReadOnly ? "↓" : "⇄",
+                    var grant = RowButton(granted == ShareDirection.ReadOnly ? Icons.ArrowDown : Icons.Bidirectional,
                         granted == ShareDirection.ReadOnly ? "In sola lettura: clic per dargli accesso bidirezionale" : "Bidirezionale: clic per metterlo in sola lettura");
                     grant.Click += async (_, _) => await RunFrom(grant, () => node.SetMemberGrantAsync(participant.DeviceId,
                         granted == ShareDirection.ReadOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
@@ -444,7 +454,7 @@ public partial class MainWindow : Window
                 }
 
                 var trusted = friend?.TrustedWithSensitive == true;
-                var trust = RowButton("•••", trusted ? "Affidabile: vede le password che copi. Clic per togliere" : "Clic per mostrargli anche le password che copi (affidabile)");
+                var trust = RowButton(Icons.Key, trusted ? "Affidabile: vede le password che copi. Clic per togliere" : "Clic per mostrargli anche le password che copi (affidabile)");
                 trust.Classes.Add("toggle");
                 trust.Classes.Set("lit", trusted);
                 trust.Click += (_, _) => node.SetSensitiveTrust(participant.DeviceId, participant.DisplayName, !trusted);
@@ -453,7 +463,7 @@ public partial class MainWindow : Window
                 if (host)
                 {
                     var agreement = friend?.Agreement ?? AgreementLevel.None;
-                    var pact = RowButton(agreement switch { AgreementLevel.Anytime => "∞", AgreementLevel.AutoJoin => "⤵", _ => "PATTO" },
+                    var pact = RowButton(agreement switch { AgreementLevel.Anytime => Icons.Infinity, AgreementLevel.AutoJoin => Icons.SignIn, _ => "PATTO" },
                         "Proponi un patto reciproco (deve accettarlo)");
                     pact.Classes.Add("toggle");
                     pact.Classes.Set("lit", agreement != AgreementLevel.None);
@@ -474,7 +484,8 @@ public partial class MainWindow : Window
         var flyout = new MenuFlyout();
         void Add(string header, AgreementLevel level)
         {
-            var item = new MenuItem { Header = header, IsEnabled = level != current };
+            var item = new MenuItem { IsEnabled = level != current };
+            Skin.SetHeader(item, header);
             item.Click += async (_, _) => await Run(async () =>
             {
                 if (!await node.ProposeAgreementAsync(deviceId, level))
@@ -483,11 +494,12 @@ public partial class MainWindow : Window
             flyout.Items.Add(item);
         }
 
-        Add("⤵ Entra senza conferma quando ti offri", AgreementLevel.AutoJoin);
-        Add("∞ Collegamento in qualsiasi momento", AgreementLevel.Anytime);
+        Add($"{Icons.SignIn} Entra senza conferma quando ti offri", AgreementLevel.AutoJoin);
+        Add($"{Icons.Infinity} Collegamento in qualsiasi momento", AgreementLevel.Anytime);
         if (current != AgreementLevel.None)
         {
-            var revoke = new MenuItem { Header = "✕ Sciogli il patto" };
+            var revoke = new MenuItem();
+            Skin.SetHeader(revoke, $"{Icons.Xmark} Sciogli il patto");
             revoke.Click += async (_, _) => await Run(() => node.RevokeAgreementAsync(deviceId));
             flyout.Items.Add(revoke);
         }
@@ -502,7 +514,7 @@ public partial class MainWindow : Window
         var transfers = node.Transfers;
         var active = transfers.Count(t => t.State == TransferState.Active);
         TransfersButton.IsVisible = transfers.Count > 0;
-        TransfersButton.Content = active > 0 ? $"⇅ TRASFERIMENTI ({active})" : "⇅ TRASFERIMENTI";
+        Skin.SetContent(TransfersButton, active > 0 ? $"{Icons.Transfers} TRASFERIMENTI ({active})" : $"{Icons.Transfers} TRASFERIMENTI");
     }
 
     private void RefreshCurrent()
@@ -512,6 +524,7 @@ public partial class MainWindow : Window
         {
             LcdCurrent.Text = "";
             LcdCurrentSize.Text = "";
+            _currentFull = "";
             return;
         }
 
@@ -519,7 +532,10 @@ public partial class MainWindow : Window
         var title = current.Kind == ClipboardContentKind.Files && !current.IsSensitive
             ? DisplayText.MiddleEllipsis(DisplayText.Sanitize(current.Title, 260, ""), 26)
             : current.Title;
-        LcdCurrent.Text = $"{(self ? "tu" : DisplayText.Sanitize(current.OriginName, 32))}: {(current.IsSensitive ? "••• " : "")}{title}{(current.IsShared ? "" : " · solo qui")}";
+        string Line(string shownTitle) =>
+            $"{(self ? "tu" : DisplayText.Sanitize(current.OriginName, 32))}: {(current.IsSensitive ? "••• " : "")}{shownTitle}{(current.IsShared ? "" : " · solo qui")}";
+        LcdCurrent.Text = Line(title);
+        _currentFull = current.IsSensitive ? LcdCurrent.Text : Line(DisplayText.Sanitize(current.Title, 4000, ""));
         LcdCurrentSize.Text = current.SizeBytes is { } size ? DisplayText.FormatSize(size) : "";
     }
 
@@ -533,14 +549,14 @@ public partial class MainWindow : Window
         var friends = node.Friends.All;
         if (friends.Count == 0)
         {
-            FriendsPanel.Children.Add(Hint("Nessun amico. In una sessione l'host può proporre un patto ai connessi; chiunque può marcare un partecipante come affidabile (•••)."));
+            FriendsPanel.Children.Add(Hint($"Nessun amico. In una sessione l'host può proporre un patto ai connessi; chiunque può marcare un partecipante come affidabile ({Icons.Key})."));
             return;
         }
 
         foreach (var friend in friends)
         {
             var buttons = new List<Control>();
-            var trust = RowButton("•••", friend.TrustedWithSensitive ? "Vede le tue password: clic per togliere" : "Clic per mostrargli le tue password");
+            var trust = RowButton(Icons.Key, friend.TrustedWithSensitive ? "Vede le tue password: clic per togliere" : "Clic per mostrargli le tue password");
             trust.Classes.Add("toggle");
                 trust.Classes.Set("lit", friend.TrustedWithSensitive);
             trust.Click += (_, _) => node.SetSensitiveTrust(friend.DeviceId, friend.DisplayName, !friend.TrustedWithSensitive);
@@ -559,18 +575,18 @@ public partial class MainWindow : Window
                 buttons.Add(revoke);
             }
 
-            var remove = RowButton("✕", "Togli dagli amici (patto e fiducia)");
+            var remove = RowButton(Icons.Xmark, "Togli dagli amici (patto e fiducia)");
             remove.Click += async (_, _) => await RunFrom(remove, () => node.RemoveFriendAsync(friend.DeviceId));
             buttons.Add(remove);
 
             var agreement = friend.Agreement switch
             {
-                AgreementLevel.Anytime => "∞ si collega quando vuole",
-                AgreementLevel.AutoJoin => "⤵ entra senza conferma",
+                AgreementLevel.Anytime => $"{Icons.Infinity} si collega quando vuole",
+                AgreementLevel.AutoJoin => $"{Icons.SignIn} entra senza conferma",
                 _ => "nessun patto",
             };
             var where = friend.LastEndpoint is { } endpoint ? $" · {endpoint}" : "";
-            FriendsPanel.Children.Add(Row(friend.DisplayName, $"{agreement}{(friend.TrustedWithSensitive ? " · ••• vede le password" : "")}{where}", false, buttons,
+            FriendsPanel.Children.Add(Row(friend.DisplayName, $"{agreement}{(friend.TrustedWithSensitive ? $" · {Icons.Key} vede le password" : "")}{where}", false, buttons,
                 tip: $"Impronta {friend.Fingerprint}"));
         }
     }
@@ -693,6 +709,39 @@ public partial class MainWindow : Window
         };
     }
 
+    // ================================================================ testi troncati
+
+    /// <summary>
+    /// I testi della console finiscono con i puntini quando non ci stanno: un clic (doppio clic nella
+    /// cronologia, dove il clic singolo sceglie la voce da copiare) apre il messaggio completo.
+    /// </summary>
+    private void WireExpandableTexts()
+    {
+        MessageDialog.ExpandOnClick(LcdDevice, "Questo PC");
+        MessageDialog.ExpandOnClick(LcdParticipants, "Sessione");
+        MessageDialog.ExpandOnClick(LcdCurrent, "Clipboard attuale", () => _currentFull);
+        MessageDialog.ExpandOnClick(LcdLast, "Ultima attività", () => _lastActivityFull);
+
+        ActivityList.Tapped += async (_, e) =>
+        {
+            if (ItemText(e.Source) is { } line)
+                await MessageDialog.ShowAsync(this, "Attività", line);
+        };
+        HistoryList.DoubleTapped += async (_, e) =>
+        {
+            if (ItemText(e.Source) is null || HistoryList.SelectedIndex is not (var i and >= 0) || i >= _history.Count)
+                return;
+            var entry = _history[i];
+            var text = $"{entry.CreatedUtc.ToLocalTime():dd/MM HH:mm} · {DisplayText.Sanitize(entry.OriginName, 64)}\n\n"
+                + DisplayText.Sanitize(entry.Describe(), 4000, "(vuota)");
+            await MessageDialog.ShowAsync(this, "Cronologia", text);
+        };
+    }
+
+    /// <summary>Testo della riga di elenco su cui si è cliccato (null se il clic non è su una riga).</summary>
+    private static string? ItemText(object? source) =>
+        (source as Visual)?.FindAncestorOfType<ListBoxItem>(includeSelf: true)?.DataContext as string;
+
     // ================================================================ righe degli elenchi
 
     /// <summary>Riga di un elenco: titolo e dettaglio a sinistra, pulsanti a destra; questo PC evidenziato.</summary>
@@ -700,21 +749,24 @@ public partial class MainWindow : Window
     {
         var titleText = new TextBlock
         {
-            Text = title,
             FontFamily = Skin.LcdFont,
             FontSize = 12,
             FontWeight = FontWeight.Bold,
             Foreground = highlight ? Skin.InkBrush : Skin.LimeTextBrush,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
+        Skin.SetRich(titleText, title);
+        MessageDialog.ExpandOnClick(titleText, "Dettaglio");
         var detailText = new TextBlock
         {
-            Text = detail,
             FontFamily = Skin.LcdFont,
             FontSize = 10.5,
             Foreground = highlight ? Skin.InkBrush : new SolidColorBrush(Color.Parse("#7FB83A")),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
+
+        Skin.SetRich(detailText, detail);
+        MessageDialog.ExpandOnClick(detailText, "Dettaglio");
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
         foreach (var button in buttons)
@@ -750,14 +802,18 @@ public partial class MainWindow : Window
         return button;
     }
 
-    private static TextBlock Hint(string text) => new()
+    private static TextBlock Hint(string text)
     {
-        Text = text,
-        FontFamily = Skin.LcdFont,
-        FontSize = 11,
-        Foreground = new SolidColorBrush(Color.Parse("#7FB83A")),
-        TextWrapping = TextWrapping.Wrap,
-    };
+        var block = new TextBlock
+        {
+            FontFamily = Skin.LcdFont,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#7FB83A")),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        Skin.SetRich(block, text);
+        return block;
+    }
 
     // ================================================================ utilità
 
@@ -814,7 +870,8 @@ public partial class MainWindow : Window
         if (items.Count > MaxActivityLines)
             items.RemoveRange(MaxActivityLines, items.Count - MaxActivityLines);
         ActivityList.ItemsSource = items;
-        LcdLast.Text = "» " + Shorten(line);
+        Skin.SetRich(LcdLast, $"{Icons.AnglesRight} " + Shorten(line));
+        _lastActivityFull = line;
     }
 
     /// <summary>Descrizione di una voce per le liste: testo ripulito (può arrivare da un altro PC) e accorciato.</summary>

@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
@@ -23,6 +24,12 @@ public static class Skin
     public static readonly Color Alert = Color.Parse("#FF5A3C");
 
     public static readonly FontFamily LcdFont = new("Cascadia Mono, Consolas, Courier New, monospace");
+
+    /// <summary>
+    /// Font Awesome Free (solido, licenza SIL OFL, Assets/fa-solid-900.ttf): tutte le icone dell'interfaccia.
+    /// I glifi stanno nell'area d'uso privato di Unicode, vedi <see cref="Icons"/>.
+    /// </summary>
+    public static readonly FontFamily IconFont = new("avares://Cus.UI/Assets#Font Awesome 6 Free");
 
     /// <summary>Icona delle finestre che compaiono nella barra delle applicazioni.</summary>
     public static WindowIcon AppIcon => s_appIcon ??= new WindowIcon(AssetLoader.Open(new Uri("avares://Cus.UI/Assets/cus.ico")));
@@ -150,15 +157,76 @@ public static class Skin
         Child = child,
     };
 
-    public static TextBlock LcdText(string text, double size = 13, bool bold = false, bool dark = false) => new()
+    /// <summary>I glifi di <see cref="Icons"/> (area d'uso privato) si disegnano con Font Awesome, il resto col font del testo.</summary>
+    public static bool IsIcon(char c) => c is >= '\uE000' and <= '\uF8FF';
+
+    /// <summary>Imposta il testo di un blocco: le icone nel testo diventano parti scritte in Font Awesome.</summary>
+    public static void SetRich(TextBlock block, string? text)
     {
-        Text = text,
-        FontFamily = LcdFont,
-        FontSize = size,
-        FontWeight = bold ? FontWeight.Bold : FontWeight.Normal,
-        Foreground = dark ? LimeTextBrush : InkBrush,
-        TextWrapping = TextWrapping.Wrap,
-    };
+        block.Inlines?.Clear();
+        if (string.IsNullOrEmpty(text) || !text.Any(IsIcon))
+        {
+            block.Text = text;
+            return;
+        }
+
+        block.Text = null;
+        var inlines = block.Inlines ??= new InlineCollection();
+        var start = 0;
+        for (var i = 0; i <= text.Length; i++)
+        {
+            // Un'icona è un pezzo a sé; il testo tra due icone è un pezzo unico.
+            var boundary = i == text.Length || IsIcon(text[i]) || (i > start && IsIcon(text[start]));
+            if (!boundary)
+                continue;
+            if (i > start)
+            {
+                var piece = text[start..i];
+                inlines.Add(IsIcon(piece[0])
+                    ? new Run(piece) { FontFamily = IconFont, FontWeight = FontWeight.Black }
+                    : new Run(piece));
+            }
+
+            start = i;
+        }
+    }
+
+    /// <summary>Testo senza icone, per i dialoghi che mostrano il messaggio per intero.</summary>
+    public static string PlainText(TextBlock block)
+    {
+        if (block.Inlines is not { Count: > 0 } inlines)
+            return block.Text ?? "";
+        return new string(string.Concat(inlines.OfType<Run>().Select(r => r.Text)).Where(c => !IsIcon(c)).ToArray()).Trim();
+    }
+
+    /// <summary>Contenuto di un pulsante o di una voce di menu: testo, con le icone in Font Awesome.</summary>
+    public static void SetContent(ContentControl control, string text) => control.Content = Rich(text);
+
+    /// <summary>Intestazione di una voce di menu, con le icone in Font Awesome.</summary>
+    public static void SetHeader(MenuItem control, string text) => control.Header = Rich(text);
+
+    private static object Rich(string text)
+    {
+        if (!text.Any(IsIcon))
+            return text;
+        var block = new TextBlock();
+        SetRich(block, text);
+        return block;
+    }
+
+    public static TextBlock LcdText(string text, double size = 13, bool bold = false, bool dark = false)
+    {
+        var block = new TextBlock
+        {
+            FontFamily = LcdFont,
+            FontSize = size,
+            FontWeight = bold ? FontWeight.Bold : FontWeight.Normal,
+            Foreground = dark ? LimeTextBrush : InkBrush,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        SetRich(block, text);
+        return block;
+    }
 
     public static TextBlock Engraved(string text) => new()
     {
@@ -173,7 +241,8 @@ public static class Skin
     /// <summary>Pulsante a pastiglia lime (stile "PRESETS").</summary>
     public static Button Pill(string text)
     {
-        var button = new Button { Content = text.ToUpperInvariant() };
+        var button = new Button();
+        SetContent(button, text.ToUpperInvariant());
         button.Classes.Add("pill");
         return button;
     }
