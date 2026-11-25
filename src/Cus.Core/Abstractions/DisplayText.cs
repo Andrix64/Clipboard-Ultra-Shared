@@ -26,9 +26,11 @@ public static class DisplayText
         var builder = new StringBuilder(Math.Min(value.Length, maxLength));
         var lastWasSpace = true;
         var marks = 0;
-        foreach (var c in value)
+        // Per code point (Rune), non per unità UTF-16: i caratteri fuori dal piano base (tag U+E0000,
+        // uso privato dei piani 15 e 16) sono coppie surrogate e a livello di char sfuggirebbero ai filtri.
+        foreach (var c in value.EnumerateRunes())
         {
-            var category = CharUnicodeInfo.GetUnicodeCategory(c);
+            var category = Rune.GetUnicodeCategory(c);
             // Gli "uso privato" sono i codici dei glifi delle icone dell'interfaccia (Font Awesome): un nome
             // di rete non deve poterli usare per far comparire un'icona in una richiesta di consenso.
             if (category is UnicodeCategory.Format or UnicodeCategory.PrivateUse)
@@ -45,7 +47,7 @@ public static class DisplayText
                 marks = 0;
             }
 
-            var isSpace = char.IsControl(c) || char.IsWhiteSpace(c) || BlankLooking.Contains(c)
+            var isSpace = Rune.IsControl(c) || Rune.IsWhiteSpace(c) || (c.IsBmp && BlankLooking.Contains((char)c.Value))
                 || category is UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
             if (isSpace)
             {
@@ -55,7 +57,7 @@ public static class DisplayText
                 continue;
             }
 
-            builder.Append(c);
+            builder.Append(c.ToString());
             lastWasSpace = false;
         }
 

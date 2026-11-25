@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace Cus.Core.Abstractions;
 
@@ -177,14 +178,15 @@ public static class ClipboardFileNames
         if (segment[^1] is '.' or ' ')
             return false;
 
-        foreach (var c in segment)
+        // Per code point: i caratteri fuori dal piano base (tag U+E0000) sono coppie surrogate.
+        foreach (var c in segment.EnumerateRunes())
         {
-            if (char.IsControl(c) || c is '<' or '>' or ':' or '"' or '\\' or '|' or '?' or '*' or '/')
+            if (Rune.IsControl(c) || c.Value is '<' or '>' or ':' or '"' or '\\' or '|' or '?' or '*' or '/')
                 return false;
 
             // Caratteri invisibili o di direzione (U+202E e simili): "fattura<RLO>txt.exe" in Esplora
             // risorse sembrerebbe un .txt.
-            if (CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
+            if (Rune.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
                 return false;
         }
 

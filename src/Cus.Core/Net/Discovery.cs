@@ -388,8 +388,13 @@ internal sealed class AnnouncementFreshness(int capacity = 1024)
                         _last.Remove(id);
                 }
 
+                // Ancora pieno: si sacrifica il dispositivo sentito meno di recente invece di rifiutare i nuovi,
+                // altrimenti chi genera molte identità impedirebbe agli host veri di farsi vedere.
                 if (_last.Count >= capacity)
-                    return false;
+                {
+                    var oldest = _last.MinBy(e => e.Value.SeenTicks).Key;
+                    _last.Remove(oldest);
+                }
             }
 
             _last[deviceId] = (sequence, now);

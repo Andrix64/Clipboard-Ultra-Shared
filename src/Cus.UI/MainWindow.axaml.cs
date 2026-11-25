@@ -1,3 +1,4 @@
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -308,7 +309,11 @@ public partial class MainWindow : Window
     private static string Initial(string name)
     {
         var trimmed = name.Trim();
-        return trimmed.Length == 0 ? "?" : char.ToUpperInvariant(trimmed[0]).ToString();
+        if (trimmed.Length == 0)
+            return "?";
+        // Il primo code point, non il primo char: un'emoji iniziale è una coppia surrogata.
+        var first = trimmed.EnumerateRunes().First();
+        return Rune.ToUpperInvariant(first).ToString();
     }
 
     private void RefreshPeers()

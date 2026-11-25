@@ -464,7 +464,7 @@ public sealed partial class CusNode
                 var recipients = push.Sensitive
                     ? (push.SensitiveRecipients ?? []).Where(id => id is { Length: 32 }).Take(MaxParticipants).ToHashSet(StringComparer.OrdinalIgnoreCase)
                     : null;
-                await DistributeAsync(connection.Remote.DeviceId, connection.Remote.DisplayName, push.ItemId!, push.Content!, connection,
+                await DistributeAsync(connection.Remote.DeviceId, member.ShownName, push.ItemId!, push.Content!, connection,
                     sensitive: push.Sensitive, sensitiveRecipients: recipients);
                 break;
             case SetDirectionMessage set when Enum.IsDefined(set.Direction):
@@ -487,22 +487,47 @@ public sealed partial class CusNode
                     : $"{connection.Remote.DisplayName} è tornato bidirezionale.");
                 break;
             case RenameMessage rename:
+                // Un nome più lungo di quello che l'interfaccia permette non è di un client onesto.
+                if (rename.DisplayName is not { Length: <= MaxRenameChars })
+                    return;
                 var newName = DisplayText.Sanitize(rename.DisplayName, 64);
+                string oldName;
+                string? refused = null;
                 await _gate.WaitAsync();
                 try
                 {
                     if (CurrentMember(connection) is not { } renamed || renamed.DisplayName == newName)
                         return;
-                    renamed.DisplayName = newName;
-                    RaiseSessionChanged();
+
+                    // Al più un cambio ogni RenameInterval: ogni cambio rimanda l'elenco a tutti i membri.
+                    var now = Environment.TickCount64;
+                    if (renamed.LastRenameTicks is { } last && now - last < RenameInterval.TotalMilliseconds)
+                        return;
+                    renamed.LastRenameTicks = now;
+
+                    oldName = renamed.ShownName;
+                    // Stessi controlli dell'ingresso: il nome non può confondersi con l'host, con un altro
+                    // partecipante o con un amico (a occhio).
+                    refused = LookAlikeRefusal(renamed, newName);
+                    if (refused is null)
+                    {
+                        renamed.DisplayName = newName;
+                        RaiseSessionChanged();
+                    }
                 }
                 finally
                 {
                     _gate.Release();
                 }
 
+                if (refused is not null)
+                {
+                    Log($"{oldName} ha provato a chiamarsi {newName}, ma somiglia a {refused}: nome rifiutato.");
+                    return;
+                }
+
                 await BroadcastStateAsync();
-                Log($"{connection.Remote.DisplayName} ora si chiama {newName}.");
+                Log($"{oldName} ora si chiama {newName}.");
                 break;
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
@@ -514,6 +539,32 @@ public sealed partial class CusNode
                 await SendHistoryItemAsync(connection, request);
                 break;
         }
+    }
+
+    private const int MaxRenameChars = 256;
+
+    private static readonly TimeSpan RenameInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Il nome (host, altro partecipante o amico con un'altra identità) a cui <paramref name="name"/> somiglia
+    /// troppo per essere accettato come nuovo nome di <paramref name="member"/>, o null. Sotto _gate.
+    /// </summary>
+    private string? LookAlikeRefusal(Member member, string name)
+    {
+        if (DisplayText.LooksAlike(name, Identity.DisplayName))
+            return Identity.DisplayName;
+        if (_hostSession is { } session)
+        {
+            foreach (var other in session.Members.Values)
+            {
+                if (!ReferenceEquals(other, member) && DisplayText.LooksAlike(name, other.ShownName))
+                    return other.ShownName;
+            }
+        }
+
+        var self = member.Connection.Remote.DeviceId;
+        return Friends.All.FirstOrDefault(f => !string.Equals(f.DeviceId, self, StringComparison.OrdinalIgnoreCase)
+            && DisplayText.LooksAlike(f.DisplayName, name))?.DisplayName;
     }
 
     /// <summary>Il membro della sessione host collegato con questa connessione, se lo è ancora.</summary>
@@ -1355,7 +1406,7 @@ public sealed partial class CusNode
             new ParticipantDto(self.DeviceId, self.DisplayName, ShareDirection.Bidirectional, IsHost: true),
             .. Members.Values
                 .OrderBy(m => m.JoinedUtc)
-                .Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.DisplayName ?? m.Connection.Remote.DisplayName, m.Direction, IsHost: false, m.Granted)),
+                .Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.ShownName, m.Direction, IsHost: false, m.Granted)),
         ];
 
         public SessionView ToView(DeviceIdentity self, bool visible) => new(
@@ -1380,6 +1431,12 @@ public sealed partial class CusNode
 
         /// <summary>Nome cambiato dal membro dopo essere entrato (null: quello dell'handshake).</summary>
         public string? DisplayName { get; set; }
+
+        /// <summary>Il nome attuale del membro.</summary>
+        public string ShownName => DisplayName ?? Connection.Remote.DisplayName;
+
+        /// <summary>Quando il membro ha cambiato nome l'ultima volta (millisecondi monotoni).</summary>
+        public long? LastRenameTicks { get; set; }
 
         /// <summary>Modalità concessa dall'host.</summary>
         public ShareDirection Granted { get; set; } = granted;

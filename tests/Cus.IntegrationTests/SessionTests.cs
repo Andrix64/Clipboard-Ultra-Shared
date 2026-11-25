@@ -68,6 +68,28 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Rename_ToALookAlikeOfTheHost_IsRefused_AndRenamesAreRateLimited()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 2, "andrea vede luca");
+        var hostName = andrea.Node.Identity.DisplayName;
+
+        // Il nome dell'host (anche con altre maiuscole) non è accettato: all'host resta il nome vecchio.
+        await luca.Node.SetDisplayNameAsync(hostName.ToUpperInvariant() + " ");
+        // Subito dopo, un secondo cambio è oltre il limite e viene scartato.
+        await luca.Node.SetDisplayNameAsync("Troppo Presto");
+
+        // Passato l'intervallo un nome onesto passa; i due precedenti non sono mai arrivati nell'elenco.
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        await luca.Node.SetDisplayNameAsync("Luca Onesto");
+        await Eventually.TrueAsync(() => andrea.Node.Session!.Participants.Any(p => !p.IsHost && p.DisplayName == "Luca Onesto"), "l'host vede il nome onesto");
+        Assert.DoesNotContain(andrea.Node.Session!.Participants, p => !p.IsHost && p.DisplayName == "Troppo Presto");
+        Assert.Single(andrea.Node.Session!.Participants, p => DisplayText.LooksAlike(p.DisplayName, hostName));
+    }
+
+    [Fact]
     public async Task Rejected_StartsNoSessionForTheRequester()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));

@@ -127,4 +127,12 @@ public class DisplayTextFormattingTests
         Assert.Equal("ab", DisplayText.Sanitize("ab\U0001F600", 3));
         Assert.Equal("fallback", DisplayText.Sanitize(null, 10, "fallback"));
     }
+
+    [Fact]
+    public void Sanitize_RemovesInvisibleCharactersOutsideTheBasicPlane()
+    {
+        // Tag (U+E0041) e uso privato del piano 15 (U+F0000) sono coppie surrogate: vanno tolti come gli altri.
+        Assert.Equal("ab", DisplayText.Sanitize("a󠁁󰀀b", 64));
+        Assert.Equal("a😀", DisplayText.Sanitize("a😀", 64));
+    }
 }
