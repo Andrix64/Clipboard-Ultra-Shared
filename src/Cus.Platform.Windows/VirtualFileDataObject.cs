@@ -199,6 +199,13 @@ internal sealed class VirtualFileDataObject : ComIDataObject
                     entries.Add(new Entry(directory, 0, -1));
             }
 
+            if (files[i].IsDirectory)
+            {
+                if (directories.Add(path))
+                    entries.Add(new Entry(path, 0, -1));
+                continue;
+            }
+
             entries.Add(new Entry(path, files[i].SizeBytes, i));
         }
 

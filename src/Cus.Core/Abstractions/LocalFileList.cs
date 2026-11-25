@@ -36,12 +36,21 @@ public static class LocalFileList
                 AttributesToSkip = 0,
                 MaxRecursionDepth = ClipboardFileNames.MaxDepth,
             };
-            foreach (var file in Directory.EnumerateFiles(path, "*", options))
+            foreach (var entry in Directory.EnumerateFileSystemEntries(path, "*", options).Prepend(path))
             {
                 if (files.Count > ClipboardFileNames.MaxFiles)
                     break;
-                var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                files.Add(new ClipboardFileInfo(relative, new FileInfo(file).Length) { LocalPath = file });
+                var relative = Path.GetRelativePath(root, entry).Replace('\\', '/');
+                if (Directory.Exists(entry))
+                {
+                    // Le cartelle con contenuto compaiono già nei nomi dei file; quelle vuote
+                    // andrebbero perse, quindi si elencano esplicitamente.
+                    if (!Directory.EnumerateFileSystemEntries(entry, "*", new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0 }).Any())
+                        files.Add(new ClipboardFileInfo(relative, 0) { IsDirectory = true });
+                    continue;
+                }
+
+                files.Add(new ClipboardFileInfo(relative, new FileInfo(entry).Length) { LocalPath = entry });
             }
         }
 

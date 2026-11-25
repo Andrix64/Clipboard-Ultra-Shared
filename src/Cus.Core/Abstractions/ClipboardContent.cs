@@ -19,6 +19,12 @@ public sealed record ClipboardFileInfo(string Name, long SizeBytes)
     /// <summary>Percorso locale sul PC d'origine. Non viaggia mai in rete.</summary>
     [JsonIgnore]
     public string? LocalPath { get; init; }
+
+    /// <summary>
+    /// True per una cartella vuota (dimensione 0, nessun contenuto da trasferire). Le cartelle con
+    /// file dentro non servono: compaiono già come prefisso dei nomi dei file.
+    /// </summary>
+    public bool IsDirectory { get; init; }
 }
 
 /// <summary>

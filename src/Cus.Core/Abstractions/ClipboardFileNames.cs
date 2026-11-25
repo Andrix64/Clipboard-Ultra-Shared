@@ -84,7 +84,18 @@ public static class ClipboardFileNames
 
             totalBytes += file.SizeBytes;
 
-            if (directories.Contains(file.Name) || !filePaths.Add(file.Name))
+            if (file.IsDirectory)
+            {
+                if (file.SizeBytes != 0 || filePaths.Contains(file.Name))
+                {
+                    reason = $"cartella non valida: '{DisplayText.Sanitize(file.Name, 80, "?")}'";
+                    return false;
+                }
+
+                // Il nome stesso è una cartella, come i suoi prefissi.
+                directories.Add(file.Name);
+            }
+            else if (directories.Contains(file.Name) || !filePaths.Add(file.Name))
             {
                 reason = $"nome ripetuto: '{file.Name}'";
                 return false;
@@ -119,7 +130,8 @@ public static class ClipboardFileNames
     public static IReadOnlyList<string> ExecutableNames(IReadOnlyList<ClipboardFileInfo>? files) =>
         files is null
             ? []
-            : files.Select(f => f.Name[(f.Name.LastIndexOf('/') + 1)..])
+            : files.Where(f => !f.IsDirectory)
+                .Select(f => f.Name[(f.Name.LastIndexOf('/') + 1)..])
                 .Where(n => ExecutableExtensions.Contains(Path.GetExtension(n)))
                 .ToList();
 

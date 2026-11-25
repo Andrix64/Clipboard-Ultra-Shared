@@ -66,6 +66,12 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
             var target = Path.GetFullPath(Path.Combine(root, files[i].Name.Replace('/', Path.DirectorySeparatorChar)));
             if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"Nome di file non valido: '{files[i].Name}'.");
+            if (files[i].IsDirectory)
+            {
+                Directory.CreateDirectory(target);
+                continue;
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
 
             await using var output = File.Create(target);
