@@ -385,6 +385,10 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
             // scrittura come nostra grazie al marcatore, che controlla prima di questi formati.
             Set(_formats.CanIncludeInHistory, BitConverter.GetBytes(0u));
             Set(_formats.CanUploadToCloud, BitConverter.GetBytes(0u));
+            // Un contenuto sensibile ricevuto (password da un amico affidabile) resta sensibile anche
+            // qui: gli altri programmi che osservano la clipboard lo ignorano come quello originale.
+            if (content.IsMarkedSensitive)
+                Set(_formats.ExcludeFromMonitor, [0]);
             Set(_formats.OwnWriteMarker, [1]);
         }
         finally

@@ -1,5 +1,6 @@
 using System.Net;
 using Cus.Core.Abstractions;
+using Cus.Core.Friends;
 using Cus.Core.Hosting;
 
 namespace Cus.Core.Node;
@@ -17,18 +18,40 @@ public sealed record CusNodeOptions
 
     public IReadOnlyList<PeerEndpoint> ManualPeers { get; init; } = [];
 
-    /// <summary>Quanto attendere la risposta dell'utente a una richiesta di accesso.</summary>
+    /// <summary>Quanto attendere la risposta dell'utente a una richiesta di ingresso o a un patto.</summary>
     public TimeSpan ConsentTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
-    public TimeSpan PairingCodeLifetime { get; init; } = TimeSpan.FromMinutes(2);
+    /// <summary>Un trasferimento di file senza letture per questo tempo si considera interrotto.</summary>
+    public TimeSpan TransferIdleTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
-    public int PairingAttempts { get; init; } = 3;
+    /// <summary>
+    /// Dopo una richiesta di ingresso rifiutata, scaduta o annullata, lo stesso dispositivo (e lo
+    /// stesso indirizzo, salvo il loopback) non può chiedere di nuovo per questo tempo.
+    /// </summary>
+    public TimeSpan JoinRetryCooldown { get; init; } = TimeSpan.FromSeconds(30);
 }
 
-/// <summary>Peer visibile: trovato in rete o inserito a mano.</summary>
-public sealed record PeerView(string? DeviceId, string DisplayName, string UserName, string Host, int Port, bool IsTrusted, bool IsManual)
+/// <summary>
+/// Peer raggiungibile: un host visibile trovato in rete, un amico con patto "in qualsiasi momento"
+/// (all'ultimo indirizzo noto) o un indirizzo inserito a mano.
+/// </summary>
+/// <param name="Participants">Persone nella sessione dell'host annunciato (lui compreso); 0 se non annunciato.</param>
+/// <param name="IsAnnounced">Si sta offrendo come host adesso (annuncio in rete).</param>
+public sealed record PeerView(
+    string? DeviceId,
+    string DisplayName,
+    string UserName,
+    string Host,
+    int Port,
+    int Participants,
+    bool IsAnnounced,
+    AgreementLevel Agreement,
+    bool IsManual)
 {
     public string Address => new PeerEndpoint(Host, Port).ToString();
+
+    /// <summary>Si può chiedere di entrare: host visibile, amico con patto "in qualsiasi momento" o indirizzo a mano.</summary>
+    public bool CanJoin => IsAnnounced || IsManual || Agreement == AgreementLevel.Anytime;
 }
 
 public enum SessionRole
@@ -37,20 +60,58 @@ public enum SessionRole
     Member,
 }
 
-public sealed record SessionView(string SessionId, SessionRole Role, IReadOnlyList<SessionParticipant> Participants);
+/// <param name="IsVisible">Solo host: si sta offrendo in rete (accetta richieste di ingresso).</param>
+/// <param name="SensitiveForAll">Permesso temporaneo dell'host: i suoi contenuti sensibili vanno a tutti.</param>
+/// <param name="MyGranted">Membro: modalità concessa dall'host. Host: sempre bidirezionale.</param>
+/// <param name="MyDirection">Modalità attiva di questo PC (il membro può ridurla a sola lettura).</param>
+public sealed record SessionView(
+    string SessionId,
+    SessionRole Role,
+    IReadOnlyList<SessionParticipant> Participants,
+    bool IsVisible,
+    bool SensitiveForAll,
+    ShareDirection MyGranted,
+    ShareDirection MyDirection)
+{
+    /// <summary>Qualcun altro oltre a questo PC: la clipboard è davvero esposta.</summary>
+    public bool IsSharing => Participants.Count > 1;
+}
 
-public sealed record PairingCode(string Code, DateTimeOffset ExpiresAt, int AttemptsLeft);
+/// <summary>Richiesta di ingresso in attesa della decisione dell'host.</summary>
+public sealed record JoinRequestView(string RequestId, string DeviceId, string DisplayName, string UserName, string Fingerprint, DateTimeOffset ReceivedUtc);
 
-public enum InviteOutcome
+public enum JoinOutcome
 {
     Accepted,
     AcceptedReadOnly,
     Rejected,
 }
 
-public sealed record InviteResult(InviteOutcome Outcome, string PeerName, string? Reason);
+public sealed record JoinResult(JoinOutcome Outcome, string PeerName, string? Reason);
 
-public sealed class PairingFailedException(string message) : Exception(message);
+public enum TransferState
+{
+    Active,
+    Completed,
+    Cancelled,
+
+    /// <summary>Nessuna lettura per <see cref="CusNodeOptions.TransferIdleTimeout"/>: chi incollava ha smesso.</summary>
+    Stalled,
+}
+
+/// <summary>Trasferimento di file copiati su questo PC verso un altro partecipante.</summary>
+public sealed record TransferView(
+    string ItemId,
+    string RequesterId,
+    string RequesterName,
+    string ItemName,
+    long TotalBytes,
+    long BytesDone,
+    TransferState State,
+    DateTimeOffset LastActivityUtc)
+{
+    public double Progress => TotalBytes <= 0 ? 1 : Math.Clamp((double)BytesDone / TotalBytes, 0, 1);
+}
 
 /// <summary>Errore mostrabile all'utente così com'è.</summary>
 public sealed class CusOperationException(string message, Exception? inner = null) : Exception(message, inner);

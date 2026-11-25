@@ -25,12 +25,8 @@ public sealed record MainWindowModel
     /// <summary>Presente solo con clipboard simulata.</summary>
     public ISimulationControls? Simulation { get; init; }
 
-    /// <summary>
-    /// Genera una nuova identità e riavvia l'applicazione (dispositivo revocato). Asincrono: ferma il
-    /// nodo senza bloccare il thread della UI. Se il riavvio non riesce lancia un'eccezione con un
-    /// messaggio per l'utente.
-    /// </summary>
-    public Func<Task>? ResetIdentityAndRestart { get; init; }
+    /// <summary>C'è l'icona nell'area di notifica: la finestra si può chiudere lasciando CUS attivo.</summary>
+    public bool HasTrayIcon { get; init; }
 
     /// <summary>Chiamato alla chiusura della finestra principale, per fermare nodo e piattaforma.</summary>
     public Func<Task>? Shutdown { get; init; }
@@ -44,6 +40,9 @@ public interface ISimulationControls
     string DescribeCurrent();
 
     void CopyText(string text);
+
+    /// <summary>Come una password copiata da un password manager (contenuto marcato sensibile).</summary>
+    void CopySensitiveText(string text);
 
     void CopyPaths(IReadOnlyList<string> paths);
 

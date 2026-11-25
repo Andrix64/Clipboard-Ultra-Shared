@@ -22,22 +22,39 @@ public sealed class DiscoveryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TwoInstancesOnTheSamePc_SeeEachOther()
+    public async Task OnlyVisibleHosts_AreSeen_WithTheirParticipantCount()
     {
         var port = Random.Shared.Next(40000, 45000);
         var options = TestNode.DefaultOptions() with { EnableDiscovery = true, DiscoveryPort = port };
         var a = await TestNode.StartAsync(_root.Path, "a", options);
         var b = await TestNode.StartAsync(_root.Path, "b", options);
-        _nodes.AddRange([a, b]);
+        var c = await TestNode.StartAsync(_root.Path, "c", options);
+        _nodes.AddRange([a, b, c]);
 
+        // Nessuno si offre: nessuno si vede (come AirDrop, si è visibili solo se lo si sceglie).
+        await Task.Delay(1500);
+        Assert.DoesNotContain(a.Node.Peers, p => p.IsAnnounced);
+
+        await b.ShowAsync();
         await Eventually.TrueAsync(
-            () => a.Node.Peers.Any(p => p.DeviceId == b.Node.Identity.DeviceId && p.Port == b.Node.Port)
-                && b.Node.Peers.Any(p => p.DeviceId == a.Node.Identity.DeviceId),
-            "le due istanze si vedono", timeoutMs: 15000);
+            () => a.Node.Peers.Any(p => p.DeviceId == b.Node.Identity.DeviceId && p.Port == b.Node.Port && p.IsAnnounced && p.Participants == 1),
+            "a vede b che si offre", timeoutMs: 15000);
+        Assert.DoesNotContain(b.Node.Peers, p => p.DeviceId == a.Node.Identity.DeviceId);
 
-        var peerB = a.Node.Peers.First(p => p.DeviceId == b.Node.Identity.DeviceId);
-        var result = await a.Node.InviteAsync(peerB.Host, peerB.Port);
-        Assert.Equal(InviteOutcome.Accepted, result.Outcome);
+        var peerB = a.Node.Peers.First(p => p.DeviceId == b.Node.Identity.DeviceId && p.IsAnnounced);
+        Assert.True(peerB.CanJoin);
+        var result = await a.Node.JoinAsync(peerB.Host, peerB.Port, peerB.DeviceId);
+        Assert.Equal(JoinOutcome.Accepted, result.Outcome);
+
+        // Chi guarda da fuori vede quante persone ci sono nella sessione di b.
+        await Eventually.TrueAsync(
+            () => c.Node.Peers.Any(p => p.DeviceId == b.Node.Identity.DeviceId && p.Participants == 2),
+            "c vede due persone nella sessione di b", timeoutMs: 15000);
+
+        // b smette di offrirsi: sparisce subito dall'elenco, senza aspettare la scadenza.
+        await b.Node.SetVisibleAsync(false);
+        await Eventually.TrueAsync(() => !c.Node.Peers.Any(p => p.DeviceId == b.Node.Identity.DeviceId), "b sparisce", timeoutMs: 3000);
+        Assert.Equal(2, b.Node.Session?.Participants.Count);
     }
 
     [Fact]

@@ -10,6 +10,10 @@ public sealed class RecordingOverlayIndicator : IOverlayIndicator
 {
     public event EventHandler? LeaveRequested;
 
+    public event EventHandler? TransfersRequested;
+
+    public event EventHandler? DirectionToggleRequested;
+
     public event EventHandler? StateChanged;
 
     public SessionIndicatorState? State { get; private set; }
@@ -28,8 +32,14 @@ public sealed class RecordingOverlayIndicator : IOverlayIndicator
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Simula il clic dell'utente sull'indicatore.</summary>
+    /// <summary>Simula il doppio clic dell'utente sull'indicatore (uscita dalla sessione).</summary>
     public void Click() => LeaveRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Simula il pulsante dei trasferimenti.</summary>
+    public void ClickTransfers() => TransfersRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Simula il pulsante sola lettura / bidirezionale del membro.</summary>
+    public void ClickDirection() => DirectionToggleRequested?.Invoke(this, EventArgs.Empty);
 
     public void Dispose() => Hide();
 }

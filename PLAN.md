@@ -2,6 +2,24 @@
 
 > Creato il 2026-11-24. Copre solo lo sviluppo, fino a un'applicazione Windows completa e provata. Restano fuori installer, firma del codice, distribuzione, aggiornamenti automatici e porting a Linux. Requisiti e decisioni sono in [IDEA.md](IDEA.md).
 
+## Stato al 2026-11-25
+
+Ridisegno del modello (vedi IDEA.md, "Modello del 2026-11-25"). `dotnet build Cus.slnx` senza warning; `dotnet test`: 123 + 70 + 57 = 250 su 250 (dopo la revisione qui sotto). Copertura delle righe di `Cus.Core` e delle piattaforme circa 85% (coverlet); `Cus.UI` e `Cus.App.Windows` non hanno test automatici.
+
+| Progetto di test | Test | Copre |
+|---|---|---|
+| `Cus.Core.Tests` | 123 | opzioni, profili, DB cifrato e migrazione 3 → 4, PNG, canale cifrato, nomi dei file, amici, riepilogo della clipboard, nomi accorciati e dimensioni, pulizia dei nomi dalla rete |
+| `Cus.IntegrationTests` | 70 | visibilità e richieste di ingresso (attesa dopo un rifiuto), permessi per membro, patti, proposte concorrenti o senza risposta e scioglimento (anche a PC spento), rimozione di un amico, password e sessione nuova dopo l'ultimo membro, trasferimenti che sopravvivono a una nuova copia e annullamento, scoperta con conteggio, peer manuali, messaggi ostili |
+| `Cus.Platform.Windows.Tests` | 57 | DPAPI, DIB, clipboard reale, contenuti sensibili, virtual files, incolla vero con Esplora risorse |
+
+Cosa è cambiato nel codice:
+
+- **Tolti:** `Crypto/CPace.cs`, i binding ristretto255, `Trust/` (lista di revoche), `Node/CusNode.Pairing.cs` e i loro test (39). La migrazione 4 del DB elimina `trust_entries` e gli indirizzi dei PC abbinati e crea `friends`.
+- **Protocollo:** il secondo messaggio di ogni connessione è `FriendSyncMessage` (livello del patto, si tiene il più basso). Al posto dell'invito dell'host ci sono `JoinRequestMessage` e `JoinReplyMessage`; nuovi `SetDirectionMessage`, `AgreementProposalMessage` e `AgreementReplyMessage`. `ClipboardPushMessage` e `ClipboardItemMessage` portano il flag `Sensitive`; la lettura dei file porta il richiedente vero quando l'host la inoltra.
+- **Nucleo:** `CusNode.Sessions.cs` (visibilità, ingresso, permessi, instradamento delle password), `CusNode.Friends.cs` (patti, fiducia), `CusNode.Transfers.cs` (offerte e trasferimenti), `Friends/FriendStore.cs`.
+- **UI:** `MainWindow` a tre corpi, `AvaloniaOverlayIndicator` aggiornato sul posto, `TransfersWindow`, icona nell'area di notifica in `App.axaml.cs`.
+- **Verifica a mano (2026-11-25):** due istanze sullo stesso PC pilotate con UI Automation: offerta come host, richiesta di ingresso, consenso, copia condivisa con "testo di N caratteri", indicatore reale con un file dal nome lungo accorciato in mezzo, passaggio a sola lettura dall'indicatore.
+
 ## Stato al 2026-11-24
 
 Fasi 0–4 completate. `dotnet build` senza warning; `dotnet test` 228 su 228 (dopo la modifica della sola lettura):
@@ -57,6 +75,18 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
   - PNG: rifiutato prima di allocare se i dati compressi non bastano per le dimensioni dichiarate;
   - librerie native cercate solo nella cartella dell'applicazione e in System32;
   - UI: la lista dei peer non sovrascrive più ogni 3 s l'indirizzo di abbinamento, pulsanti disattivati durante inviti/abbinamenti/revoche, nomi e testi dalla rete ripuliti anche nella cronologia, notifiche impilate.
+
+### Revisione di sicurezza e correttezza (2026-11-25)
+
+- **Sessione riusata (bloccante):** con l'host visibile, l'uscita dell'ultimo membro non chiudeva la sessione. Chi entrava dopo ereditava il permesso temporaneo per le password e la cronologia dei membri di prima. Ora parte una sessione nuova (`OnMemberClosedAsync`); test `SensitiveForAll_AndHistory_DoNotPassToWhoJoinsAfterTheLastMemberLeft`.
+- **Visibilità:** chi chiede di entrare mentre si offre torna visibile se la richiesta fallisce; durante una richiesta in corso non ci si può offrire. Una sessione creata da un patto e rimasta vuota per un errore d'invio non resta in giro.
+- **Richieste insistenti:** dopo un rifiuto, una scadenza o un annullamento, 30 s di attesa per dispositivo e indirizzo (`CusNodeOptions.JoinRetryCooldown`).
+- **Letture di file:** al massimo 16 in corso per connessione; lo slot globale (8) copre solo la lettura dal disco, non l'attesa del PC d'origine quando l'host inoltra.
+- **Saluto iniziale:** limitato a 4 KB (prima 8 MB per chiunque si collegasse).
+- **Nomi dalla rete:** `DisplayText.Sanitize` toglie anche le lettere che si disegnano vuote (riempitivi Hangul, Braille vuoto) e i segni combinanti oltre due per lettera.
+- **Amici:** `FriendStore.Remove` sotto lo stesso lock di `RememberEndpoint` (un amico rimosso non torna), e notifica solo se c'era.
+- **Trasferimenti:** un pezzo letto due volte non conta doppio e non chiude il trasferimento in anticipo; i conteggi dell'indicatore si aggiornano subito.
+- **Lasciati aperti** (vedi IDEA.md, "Cosa nascosto non nasconde", e le questioni aperte): saluto visibile anche da nascosto, annunci non autenticati, `_gate` tenuto durante gli invii ai membri (al massimo 15 s per invio), nessun Mark-of-the-Web sui file ricevuti, nessun limite alla dimensione totale dichiarata dei file.
 
 ### Come provare a mano
 
@@ -157,6 +187,9 @@ Ogni fase deve essere verificabile con un solo PC Windows. I mezzi, già predisp
 - il traffico in loopback è cifrato: una cattura non mostra il testo copiato.
 
 ## Fase 3 — Identità e abbinamento
+
+> [!note]
+> Superata il 2026-11-25: abbinamento con codice, CPace e lista di revoche sono stati tolti (vedi "Stato al 2026-11-25").
 
 **Obiettivo:** i PC dello stesso utente si abbinano con un codice e si possono revocare in modo sicuro.
 

@@ -48,16 +48,23 @@ public class SimulatedPlatformTests
     public void OverlayIndicator_RecordsStateAndClick()
     {
         using var overlay = new RecordingOverlayIndicator();
-        var leaveRequested = false;
+        var (leaveRequested, transfersRequested, directionRequested) = (false, false, false);
         overlay.LeaveRequested += (_, _) => leaveRequested = true;
+        overlay.TransfersRequested += (_, _) => transfersRequested = true;
+        overlay.DirectionToggleRequested += (_, _) => directionRequested = true;
 
-        overlay.Show(new SessionIndicatorState([new SessionParticipant("Andrea", ShareDirection.Bidirectional, IsHost: true)]));
+        overlay.Show(new SessionIndicatorState(
+            [new SessionParticipant("ID", "Andrea", ShareDirection.Bidirectional, ShareDirection.Bidirectional, IsHost: true, IsSelf: true)]));
         Assert.True(overlay.IsVisible);
 
+        overlay.ClickTransfers();
+        overlay.ClickDirection();
         overlay.Click();
         overlay.Hide();
 
         Assert.True(leaveRequested);
+        Assert.True(transfersRequested);
+        Assert.True(directionRequested);
         Assert.False(overlay.IsVisible);
     }
 

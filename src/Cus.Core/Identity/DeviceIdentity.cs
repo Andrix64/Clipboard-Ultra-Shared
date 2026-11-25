@@ -58,9 +58,15 @@ public sealed class DeviceIdentity
         Convert.ToHexString(SHA256.HashData(signPublicKey))[..32];
 
     /// <summary>Impronta leggibile a voce: 5 gruppi da 4 caratteri dello SHA-256 della chiave pubblica.</summary>
-    public static string FormatFingerprint(ReadOnlySpan<byte> signPublicKey)
-    {
-        var hex = Convert.ToHexString(SHA256.HashData(signPublicKey));
-        return string.Join('-', Enumerable.Range(0, 5).Select(i => hex.Substring(i * 4, 4)));
-    }
+    public static string FormatFingerprint(ReadOnlySpan<byte> signPublicKey) =>
+        FingerprintOf(Convert.ToHexString(SHA256.HashData(signPublicKey)));
+
+    /// <summary>
+    /// Impronta a partire dall'ID (stesso hash, quindi stessa impronta di <see cref="FormatFingerprint"/>):
+    /// serve per gli amici, di cui si conserva solo l'ID.
+    /// </summary>
+    public static string FingerprintOf(string deviceIdOrHash) =>
+        deviceIdOrHash.Length < 20
+            ? deviceIdOrHash
+            : string.Join('-', Enumerable.Range(0, 5).Select(i => deviceIdOrHash.Substring(i * 4, 4)));
 }

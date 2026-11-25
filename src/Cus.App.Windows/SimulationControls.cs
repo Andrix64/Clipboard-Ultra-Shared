@@ -21,6 +21,8 @@ internal sealed class SimulationControls : ISimulationControls
 
     public void CopyText(string text) => _clipboard.Copy(ClipboardContent.FromText(text));
 
+    public void CopySensitiveText(string text) => _clipboard.Copy(ClipboardContent.FromText(text, isMarkedSensitive: true));
+
     public void CopyPaths(IReadOnlyList<string> paths)
     {
         var files = LocalFileList.FromPaths(paths);

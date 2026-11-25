@@ -3,19 +3,20 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cus.Core.Abstractions;
 using Cus.Core.Storage;
-using Cus.Core.Trust;
+using Cus.Core.Friends;
 
 namespace Cus.Core.Net;
 
 /// <summary>Messaggi del protocollo applicativo, serializzati in JSON dentro il canale cifrato.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$t")]
 [JsonDerivedType(typeof(HelloMessage), "hello")]
-[JsonDerivedType(typeof(TrustSyncMessage), "trust-sync")]
+[JsonDerivedType(typeof(FriendSyncMessage), "friend-sync")]
 [JsonDerivedType(typeof(PingMessage), "ping")]
 [JsonDerivedType(typeof(ByeMessage), "bye")]
-[JsonDerivedType(typeof(SessionInviteMessage), "session-invite")]
-[JsonDerivedType(typeof(SessionInviteReplyMessage), "session-invite-reply")]
+[JsonDerivedType(typeof(JoinRequestMessage), "join-request")]
+[JsonDerivedType(typeof(JoinReplyMessage), "join-reply")]
 [JsonDerivedType(typeof(SessionStateMessage), "session-state")]
+[JsonDerivedType(typeof(SetDirectionMessage), "set-direction")]
 [JsonDerivedType(typeof(ClipboardPushMessage), "clipboard-push")]
 [JsonDerivedType(typeof(ClipboardItemMessage), "clipboard-item")]
 [JsonDerivedType(typeof(ClipboardAckMessage), "clipboard-ack")]
@@ -27,10 +28,8 @@ namespace Cus.Core.Net;
 [JsonDerivedType(typeof(HistoryItemReplyMessage), "history-item-reply")]
 [JsonDerivedType(typeof(FileReadRequestMessage), "file-read")]
 [JsonDerivedType(typeof(FileReadReplyMessage), "file-read-reply")]
-[JsonDerivedType(typeof(PairingStartMessage), "pairing-start")]
-[JsonDerivedType(typeof(PairingReplyMessage), "pairing-reply")]
-[JsonDerivedType(typeof(PairingConfirmMessage), "pairing-confirm")]
-[JsonDerivedType(typeof(PairingResultMessage), "pairing-result")]
+[JsonDerivedType(typeof(AgreementProposalMessage), "agreement-proposal")]
+[JsonDerivedType(typeof(AgreementReplyMessage), "agreement-reply")]
 public abstract record CusMessage
 {
     // L'encoder di default scrive ogni carattere non ASCII come \uXXXX (6 byte): un testo italiano o
@@ -73,30 +72,40 @@ public interface IReplyMessage
 public sealed record HelloMessage(string DisplayName, string UserName, int ListenPort) : CusMessage;
 
 /// <summary>
-/// Secondo messaggio, sempre presente: la lista di fiducia se l'altra parte è un dispositivo
-/// dello stesso utente, altrimenti vuota.
+/// Secondo messaggio, sempre presente, e di nuovo quando un patto si scioglie: il livello del patto
+/// che questo PC ha con l'altro. Entrambi tengono il più basso dei due, così un patto sciolto da
+/// una parte cade anche dall'altra. Non può mai alzarlo.
 /// </summary>
-public sealed record TrustSyncMessage(IReadOnlyList<TrustEntry> Entries) : CusMessage;
+public sealed record FriendSyncMessage(AgreementLevel Level) : CusMessage;
 
 public sealed record PingMessage : CusMessage;
 
 public sealed record ByeMessage(string Reason) : CusMessage;
 
-/// <summary>Host → invitato. La modalità la sceglie chi invita; l'invitato può solo ridurla a sola lettura.</summary>
-public sealed record SessionInviteMessage(string SessionId, ShareDirection Direction = ShareDirection.Bidirectional) : CusMessage;
+/// <summary>Chi vuole entrare → host. La modalità la decide l'host (o il patto, se c'è).</summary>
+public sealed record JoinRequestMessage : CusMessage;
 
-public sealed record SessionInviteReplyMessage(ConsentDecision Decision, string? Reason) : CusMessage;
+/// <summary>Host → chi vuole entrare.</summary>
+public sealed record JoinReplyMessage(bool Accepted, string? SessionId, ShareDirection Granted, string? Reason) : CusMessage;
 
-public sealed record ParticipantDto(string DeviceId, string DisplayName, ShareDirection Direction, bool IsHost);
+/// <param name="Direction">Modalità attiva (la più restrittiva tra concessa e scelta dal membro).</param>
+/// <param name="Granted">Modalità concessa dall'host.</param>
+public sealed record ParticipantDto(string DeviceId, string DisplayName, ShareDirection Direction, bool IsHost, ShareDirection Granted = ShareDirection.Bidirectional);
 
-public sealed record SessionStateMessage(string SessionId, IReadOnlyList<ParticipantDto> Participants) : CusMessage;
+public sealed record SessionStateMessage(string SessionId, IReadOnlyList<ParticipantDto> Participants, bool SensitiveForAll = false) : CusMessage;
+
+/// <summary>Membro → host: la modalità che il membro sceglie per sé (mai oltre quella concessa).</summary>
+public sealed record SetDirectionMessage(ShareDirection Direction) : CusMessage;
 
 /// <summary>Membro → host: copia fatta sul PC del membro.</summary>
-public sealed record ClipboardPushMessage(string ItemId, ClipboardContent Content) : CusMessage;
+/// <param name="Sensitive">Contenuto marcato sensibile da un password manager.</param>
+/// <param name="SensitiveRecipients">Per i sensibili: i partecipanti a cui il membro li concede (l'host li inoltra solo a loro).</param>
+public sealed record ClipboardPushMessage(
+    string ItemId, ClipboardContent Content, bool Sensitive = false, IReadOnlyList<string>? SensitiveRecipients = null) : CusMessage;
 
 /// <summary>Host → membri: copia distribuita, con numero di sequenza assegnato dall'host.</summary>
 public sealed record ClipboardItemMessage(
-    string ItemId, long Sequence, string OriginDeviceId, string OriginName, ClipboardContent Content) : CusMessage;
+    string ItemId, long Sequence, string OriginDeviceId, string OriginName, ClipboardContent Content, bool Sensitive = false) : CusMessage;
 
 /// <summary>
 /// Host → membro d'origine: la sua copia ha ricevuto questo numero di sequenza. Finché non arriva,
@@ -119,17 +128,16 @@ public sealed record HistoryItemRequestMessage(long RequestId, string ItemId) : 
 public sealed record HistoryItemReplyMessage(long RequestId, HistoryEntry? Entry, string? Error) : CusMessage, IReplyMessage;
 
 /// <summary>Lettura lazy di un pezzo di file: membro → host, host → PC d'origine.</summary>
-public sealed record FileReadRequestMessage(long RequestId, string ItemId, int FileIndex, long Offset, int Count)
+/// <param name="ForDeviceId">
+/// Solo quando l'host inoltra la lettura per un altro membro: chi incolla davvero. Il PC d'origine lo
+/// usa per mostrare a chi vanno i suoi file; lo accetta solo dall'host.
+/// </param>
+public sealed record FileReadRequestMessage(long RequestId, string ItemId, int FileIndex, long Offset, int Count, string? ForDeviceId = null, string? ForName = null)
     : CusMessage, IRequestMessage;
 
 public sealed record FileReadReplyMessage(long RequestId, byte[]? Data, string? Error) : CusMessage, IReplyMessage;
 
-/// <summary>Chi si abbina (iniziatore CPace) → chi mostra il codice.</summary>
-public sealed record PairingStartMessage(byte[] SessionId, byte[] Share) : CusMessage;
+/// <summary>Host → membro: proposta di patto reciproco. La risposta arriva dopo la scelta dell'utente.</summary>
+public sealed record AgreementProposalMessage(long RequestId, AgreementLevel Level) : CusMessage, IRequestMessage;
 
-/// <summary>Risposta CPace con la conferma di chi mostra il codice, o un errore (codice scaduto, tentativi finiti).</summary>
-public sealed record PairingReplyMessage(byte[]? Share, byte[]? Confirmation, string? Error) : CusMessage;
-
-public sealed record PairingConfirmMessage(byte[] Confirmation) : CusMessage;
-
-public sealed record PairingResultMessage(bool Success, string? Error, TrustEntry? Entry) : CusMessage;
+public sealed record AgreementReplyMessage(long RequestId, bool Accepted) : CusMessage, IReplyMessage;

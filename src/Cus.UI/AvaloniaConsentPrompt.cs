@@ -5,14 +5,16 @@ using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
+using Cus.Core.Friends;
+using Cus.Core.Node;
 
 namespace Cus.UI;
 
 /// <summary>
-/// Finestra "X richiede l'accesso alla tua clipboard, consentire?": rifiuta, consenti e, per un invito
-/// bidirezionale, sola lettura. La finestra
-/// compare all'improvviso sopra le altre: i pulsanti restano disattivati per un attimo (un clic
-/// o un Invio già in corso non devono diventare un consenso) e il focus parte da "rifiuta".
+/// Finestre di scelta che compaiono all'improvviso: "X chiede di entrare" (per l'host: rifiuta, sola
+/// lettura, bidirezionale) e "X propone un patto" (per il membro: rifiuta, accetta). I pulsanti restano
+/// disattivati per un attimo (un clic o un Invio già in corso non devono diventare un consenso) e il
+/// focus parte da "rifiuta"; Invio ed Esc rifiutano.
 /// </summary>
 public sealed class AvaloniaConsentPrompt : IConsentPrompt
 {
@@ -23,13 +25,53 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
 
     public Task<ConsentDecision> AskAsync(ConsentRequest request, CancellationToken cancellationToken)
     {
-        var tcs = new TaskCompletionSource<ConsentDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Nomi e impronta arrivano dal peer: niente caratteri di controllo o bidi che falsino il testo.
+        var name = DisplayText.Sanitize(request.RequesterName, MaxNameLength);
+        var user = DisplayText.Sanitize(request.RequesterUserName, MaxNameLength);
+        var fingerprint = DisplayText.Sanitize(request.RequesterFingerprint, 128, "(impronta non disponibile)");
+        return Show(
+            "CUS — richiesta di ingresso",
+            "RICHIESTA DI INGRESSO",
+            $"{name} chiede di entrare nella tua condivisione.",
+            "Chi entra riceve ciò che si copia nella sessione. In bidirezionale anche ciò che copia lui arriva a tutti; "
+                + "in sola lettura le sue copie restano sul suo PC. Potrai cambiarlo dall'elenco dei connessi.",
+            user,
+            fingerprint,
+            [("✕", "rifiuta", ConsentDecision.Reject), ("↓", "sola lettura", ConsentDecision.AcceptReadOnly), ("⇄", "bidirezionale", ConsentDecision.Accept)],
+            ConsentDecision.Reject,
+            cancellationToken);
+    }
+
+    public Task<bool> AskAgreementAsync(AgreementRequest request, CancellationToken cancellationToken)
+    {
+        var name = DisplayText.Sanitize(request.HostName, MaxNameLength);
+        var fingerprint = DisplayText.Sanitize(request.HostFingerprint, 128, "(impronta non disponibile)");
+        var what = request.Level == AgreementLevel.Anytime
+            ? "potrete collegarvi l'uno all'altro in qualsiasi momento, anche senza offrirvi come host, senza conferma"
+            : "potrete entrare l'uno nella condivisione dell'altro senza conferma, quando l'altro si offre come host";
+        return Show(
+            "CUS — proposta di patto",
+            $"PATTO · {CusNode.DescribeAgreement(request.Level).ToUpperInvariant()}",
+            $"{name} ti propone un patto.",
+            $"Se accetti, {what}. Il patto vale nei due sensi e cade per entrambi appena uno dei due lo scioglie (scheda AMICI).",
+            "",
+            fingerprint,
+            [("✕", "rifiuta", false), ("✓", "accetta", true)],
+            false,
+            cancellationToken);
+    }
+
+    private static Task<T> Show<T>(
+        string title, string kicker, string headline, string body, string user, string fingerprint,
+        IReadOnlyList<(string Glyph, string Label, T Value)> choices, T rejectValue, CancellationToken cancellationToken)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher.UIThread.Post(() =>
         {
             Window? window = null;
             try
             {
-                window = Build(request, tcs);
+                window = Build(title, kicker, headline, body, user, fingerprint, choices, tcs);
                 var shown = window;
                 var registration = cancellationToken.Register(() => Dispatcher.UIThread.Post(() =>
                 {
@@ -39,7 +81,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
                 window.Closed += (_, _) =>
                 {
                     registration.Dispose();
-                    tcs.TrySetResult(ConsentDecision.Reject);
+                    tcs.TrySetResult(rejectValue);
                 };
                 window.Show();
                 window.Activate();
@@ -48,7 +90,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             {
                 // Se la finestra non si può mostrare la richiesta si rifiuta: mai un'attesa infinita.
                 System.Diagnostics.Trace.WriteLine($"CUS: finestra di consenso non disponibile: {ex}");
-                tcs.TrySetResult(ConsentDecision.Reject);
+                tcs.TrySetResult(rejectValue);
                 try
                 {
                     window?.Close();
@@ -62,16 +104,13 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         return tcs.Task;
     }
 
-    private static Window Build(ConsentRequest request, TaskCompletionSource<ConsentDecision> tcs)
+    private static Window Build<T>(
+        string title, string kicker, string headline, string body, string user, string fingerprint,
+        IReadOnlyList<(string Glyph, string Label, T Value)> choices, TaskCompletionSource<T> tcs)
     {
-        // Nomi e impronta arrivano dal peer: niente caratteri di controllo o bidi che falsino il testo.
-        var hostName = DisplayText.Sanitize(request.HostName, MaxNameLength);
-        var hostUser = DisplayText.Sanitize(request.HostUserName, MaxNameLength);
-        var fingerprint = DisplayText.Sanitize(request.HostFingerprint, 128, "(impronta non disponibile)");
-
         var window = new Window
         {
-            Title = "CUS — richiesta di accesso",
+            Title = title,
             Icon = Skin.AppIcon,
             Width = 480,
             SizeToContent = SizeToContent.Height,
@@ -84,62 +123,41 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         };
 
         var buttons = new List<Button>();
-
-        Control Choice(string glyph, string label, ConsentDecision decision, out Button button)
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Spacing = 34 };
+        foreach (var (glyph, label, value) in choices)
         {
             var choice = new Button { Content = glyph, FontSize = 18, IsEnabled = false };
             choice.Classes.Add("round");
             Avalonia.Automation.AutomationProperties.SetName(choice, label);
             choice.Click += (_, _) =>
             {
-                tcs.TrySetResult(decision);
+                tcs.TrySetResult(value);
                 window.Close();
             };
             buttons.Add(choice);
-            button = choice;
-            return new StackPanel { Spacing = 8, Children = { choice, Skin.Engraved(label) } };
+            row.Children.Add(new StackPanel { Spacing = 8, Children = { choice, Skin.Engraved(label) } });
         }
 
-        // La modalità la sceglie chi invita: un invito bidirezionale si può ridurre a sola lettura,
-        // uno in sola lettura si accetta o si rifiuta.
-        var readOnlyInvite = request.RequestedDirection == ShareDirection.ReadOnly;
-        var rejectChoice = Choice("✕", "rifiuta", ConsentDecision.Reject, out var reject);
-        var acceptChoice = Choice("✓", "consenti", ConsentDecision.Accept, out _);
-        var choices = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Spacing = 34,
-            Children = { rejectChoice },
-        };
-        if (!readOnlyInvite)
-            choices.Children.Add(Choice("◐", "sola lettura", ConsentDecision.AcceptReadOnly, out _));
-        choices.Children.Add(acceptChoice);
-        // Invio ed Esc rifiutano: accettare richiede sempre un clic deliberato.
+        // La prima scelta è sempre il rifiuto: Invio ed Esc rifiutano, accettare richiede un clic deliberato.
+        var reject = buttons[0];
         reject.IsDefault = true;
         reject.IsCancel = true;
 
-        var fingerprintText = Skin.LcdText(fingerprint, 15, bold: true);
-
-        var lcd = Skin.Lcd(new StackPanel
+        var lines = new StackPanel
         {
             Spacing = 6,
             Children =
             {
-                Skin.LcdText(readOnlyInvite ? "RICHIESTA DI ACCESSO · SOLA LETTURA" : "RICHIESTA DI ACCESSO", 11, bold: true),
-                Skin.LcdText(readOnlyInvite
-                    ? $"{hostName} vuole condividere la sua clipboard con te in sola lettura. Consentire?"
-                    : $"{hostName} chiede l'accesso alla tua clipboard. Consentire?", 17, bold: true),
-                Skin.LcdText((readOnlyInvite
-                        ? "Se accetti, ciò che copiano gli altri arriva a te; ciò che copi tu resta su questo PC. "
-                        : "Se accetti, ciò che copi arriva agli altri e ciò che copiano loro arriva a te. "
-                            + "In sola lettura ricevi le loro copie ma le tue restano su questo PC. ")
-                    + "Un indicatore in alto a destra resta visibile finché la condivisione è attiva.", 11),
-                Skin.LcdText($"UTENTE {hostUser}", 11),
-                Skin.LcdText("IMPRONTA (confrontala con quella mostrata sull'altro PC)", 11),
-                fingerprintText,
+                Skin.LcdText(kicker, 11, bold: true),
+                Skin.LcdText(headline, 17, bold: true),
+                Skin.LcdText(body, 11),
             },
-        });
+        };
+        if (user.Length > 0)
+            lines.Children.Add(Skin.LcdText($"UTENTE {user}", 11));
+        lines.Children.Add(Skin.LcdText("IMPRONTA (confrontala con quella mostrata sull'altro PC)", 11));
+        lines.Children.Add(Skin.LcdText(fingerprint, 15, bold: true));
+        var lcd = Skin.Lcd(lines);
         lcd.Padding = new Thickness(14, 10);
 
         var header = new DockPanel
@@ -147,7 +165,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             Background = Brushes.Transparent,
             Children =
             {
-                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Foreground = Skin.LimeTextBrush },
+                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Padding = new Thickness(0, 0, 5, 0), Foreground = Skin.LimeTextBrush },
             },
         };
         header.PointerPressed += (_, e) => window.BeginMoveDrag(e);
@@ -161,12 +179,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
                 {
                     Margin = new Thickness(8, 4, 8, 8),
                     Spacing = 14,
-                    Children =
-                    {
-                        header,
-                        lcd,
-                        choices,
-                    },
+                    Children = { header, lcd, row },
                 }, cornerRadius: 18),
             },
         };

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Cus.Core.Abstractions;
+using Cus.Core.Friends;
 using Cus.Core.Hosting;
 using Cus.Core.Identity;
 using Cus.Core.Net;
@@ -16,155 +17,409 @@ public sealed partial class CusNode
 
     private const int MaxFileReadBytes = 1024 * 1024;
 
-    // ================================================================ host
+    /// <summary>Richieste di ingresso in attesa della decisione dell'host: oltre, le nuove si rifiutano.</summary>
+    private const int MaxPendingJoins = 8;
+
+    /// <summary>Partecipanti di una sessione che un membro accetta dallo stato dell'host.</summary>
+    private const int MaxParticipants = 64;
+
+    private readonly ConcurrentDictionary<string, PendingJoin> _pendingJoins = new();
+
+    /// <summary>Si offre come host in rete: si annuncia e accetta richieste di ingresso.</summary>
+    private volatile bool _visible;
+
+    private int _joining;
+
+    /// <summary>Si sta offrendo come host (visibile in rete).</summary>
+    public bool IsVisible => _visible;
+
+    /// <summary>Richieste di ingresso in attesa della decisione di questo PC (host).</summary>
+    public IReadOnlyList<JoinRequestView> JoinRequests =>
+        _pendingJoins.Values.Select(p => p.View).OrderBy(v => v.ReceivedUtc).ToList();
+
+    public event EventHandler? JoinRequestsChanged;
+
+    // ================================================================ host: visibilità
 
     /// <summary>
-    /// Invia una richiesta di accesso: questo dispositivo diventa (o resta) host della sessione.
-    /// Attende la risposta dell'altro utente.
+    /// Si offre come host (visibile in rete, come AirDrop) o smette. Smettere non chiude la sessione:
+    /// chi è già dentro resta, ma nessun altro può più chiedere di entrare. Gli amici con patto "in
+    /// qualsiasi momento" possono collegarsi comunque.
     /// </summary>
-    /// <param name="expectedDeviceId">
-    /// Per i peer scelti dall'elenco: l'identità annunciata. Gli annunci non sono autenticati, quindi
-    /// si verifica che il canale cifrato appartenga davvero a quel dispositivo prima di condividere.
-    /// </param>
-    /// <param name="direction">
-    /// Modalità scelta da chi invita: in sola lettura l'altro riceve le copie della sessione ma non
-    /// invia le proprie. L'invitato può ridurre un invito bidirezionale a sola lettura, mai il contrario.
-    /// </param>
-    public async Task<InviteResult> InviteAsync(
-        string host, int port, string? expectedDeviceId = null, ShareDirection direction = ShareDirection.Bidirectional,
-        CancellationToken cancellationToken = default)
+    public Task SetVisibleAsync(bool visible) => SetVisibleAsync(visible, fromJoin: false);
+
+    /// <param name="fromJoin">Da <see cref="JoinAsync"/>, che nasconde e poi ripristina la visibilità.</param>
+    private async Task SetVisibleAsync(bool visible, bool fromJoin)
     {
-        if (!Enum.IsDefined(direction))
-            throw new ArgumentOutOfRangeException(nameof(direction));
-        if (_memberSession is not null)
-            throw new CusOperationException("Sei membro di una sessione: esci prima di invitare altri.");
-
-        var connection = await ConnectAsync(host, port, cancellationToken);
-        var name = connection.Remote.DisplayName;
-        if (expectedDeviceId is not null && !string.Equals(connection.Remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
-        {
-            connection.Close("identità diversa da quella annunciata");
-            throw new CusOperationException(
-                $"Il dispositivo a {new PeerEndpoint(host, port)} non è quello scelto: la sua identità ({connection.Remote.Fingerprint}) "
-                + "non corrisponde a quella annunciata in rete. Richiesta annullata.");
-        }
-
-        Log($"Collegato a {name}, impronta {connection.Remote.Fingerprint}.");
-        string sessionId;
-
-        await _gate.WaitAsync(cancellationToken);
+        List<PendingJoin> rejected = [];
+        await _gate.WaitAsync();
         try
         {
-            if (_memberSession is not null)
+            if (visible == _visible)
+                return;
+            if (visible && _memberSession is not null)
+                throw new CusOperationException("Sei in una condivisione come membro: esci prima di offrirti come host.");
+
+            // Una richiesta di ingresso in corso, se accettata, renderebbe questo PC membro: la
+            // visibilità tornerebbe falsa senza che l'utente lo sappia.
+            if (visible && !fromJoin && Volatile.Read(ref _joining) != 0)
+                throw new CusOperationException("C'è una richiesta di ingresso in corso: attendi la risposta prima di offrirti come host.");
+
+            _visible = visible;
+            if (visible)
             {
-                connection.Close("già membro di una sessione");
-                throw new CusOperationException("Sei membro di una sessione: esci prima di invitare altri.");
+                _hostSession ??= new HostSession(NewId());
+            }
+            else
+            {
+                rejected.AddRange(_pendingJoins.Values);
+                if (_hostSession is { Members.IsEmpty: true })
+                    _hostSession = null;
             }
 
-            if (_hostSession?.Members.ContainsKey(connection.Remote.DeviceId) == true)
-            {
-                connection.Close("già nella sessione");
-                throw new CusOperationException($"{name} è già nella sessione.");
-            }
-
-            _hostSession ??= new HostSession(NewId());
-            _hostSession.PendingInvites++;
-            sessionId = _hostSession.Id;
+            RaiseSessionChanged();
         }
         finally
         {
             _gate.Release();
         }
 
+        foreach (var pending in rejected)
+            pending.Decide(ConsentDecision.Reject, "l'host ha smesso di offrirsi");
+
+        if (visible)
+        {
+            Log("Visibile in rete: gli altri possono chiederti di entrare.");
+            if (_discovery is { } discovery)
+                await TryAnnounceAsync(discovery.AnnounceNowAsync);
+        }
+        else
+        {
+            Log("Non più visibile in rete.");
+            if (_discovery is { } discovery)
+                await TryAnnounceAsync(() => discovery.AnnounceHiddenAsync(
+                    new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port)));
+        }
+    }
+
+    private static async Task TryAnnounceAsync(Func<Task> announce)
+    {
         try
         {
-            Log(direction == ShareDirection.ReadOnly
-                ? $"Richiesta di accesso in sola lettura inviata a {name}."
-                : $"Richiesta di accesso inviata a {name}.");
-            await connection.SendAsync(new SessionInviteMessage(sessionId, direction), cancellationToken);
-            var reply = await connection.ReceiveAsync<SessionInviteReplyMessage>(_options.ConsentTimeout + TimeSpan.FromSeconds(15), cancellationToken);
-
-            if (reply.Decision == ConsentDecision.Reject)
-            {
-                connection.Close("richiesta rifiutata");
-                Log($"{name} ha rifiutato la richiesta.");
-                return new InviteResult(InviteOutcome.Rejected, name, reply.Reason);
-            }
-
-            // L'invitato può ridurre a sola lettura, mai allargare: un invito in sola lettura resta tale
-            // qualunque cosa risponda.
-            var granted = direction == ShareDirection.ReadOnly || reply.Decision == ConsentDecision.AcceptReadOnly
-                ? ShareDirection.ReadOnly
-                : ShareDirection.Bidirectional;
-            await _gate.WaitAsync(cancellationToken);
-            try
-            {
-                if (_hostSession is null || _hostSession.Id != sessionId)
-                {
-                    await connection.CloseAsync("sessione terminata");
-                    throw new CusOperationException("La sessione è terminata mentre si attendeva la risposta.");
-                }
-
-                // Due inviti allo stesso PC partiti insieme: vince il primo, l'altro si chiude.
-                if (_hostSession.Members.ContainsKey(connection.Remote.DeviceId))
-                {
-                    await connection.CloseAsync("già nella sessione");
-                    throw new CusOperationException($"{name} è già nella sessione.");
-                }
-
-                _hostSession.Members[connection.Remote.DeviceId] = new Member(connection, granted);
-                connection.MessageHandler = HostHandleMessageAsync;
-                connection.Closed += (c, reason) => RunInBackground(() => OnMemberClosedAsync(c, reason));
-                connection.Start();
-                RaiseSessionChanged();
-            }
-            finally
-            {
-                _gate.Release();
-            }
-
-            await BroadcastStateAsync();
-            Log(granted == ShareDirection.ReadOnly
-                ? $"{name} ha accettato in sola lettura: riceve le copie della sessione ma non invia le sue."
-                : $"{name} ha accettato: clipboard condivisa.");
-            return new InviteResult(granted == ShareDirection.ReadOnly ? InviteOutcome.AcceptedReadOnly : InviteOutcome.Accepted, name, null);
+            await announce();
         }
-        catch (Exception ex) when (ex is not CusOperationException)
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ObjectDisposedException or OperationCanceledException)
         {
-            connection.Close("errore");
-            throw new CusOperationException($"Richiesta a {name} non riuscita: {Describe(ex)}", ex);
+            // Rete assente: l'annuncio periodico (o la scadenza) rimette le cose a posto.
+        }
+    }
+
+    /// <summary>Risponde a una richiesta di ingresso dall'elenco (in alternativa alla finestra di consenso).</summary>
+    /// <returns>False se la richiesta non è più in attesa.</returns>
+    public bool AnswerJoinRequest(string requestId, ConsentDecision decision) =>
+        Enum.IsDefined(decision) && _pendingJoins.TryGetValue(requestId, out var pending) && pending.Decide(decision, null);
+
+    // ================================================================ host: ingresso
+
+    private async Task HandleJoinRequestAsync(PeerConnection connection)
+    {
+        var remote = connection.Remote;
+        var level = Friends.AgreementWith(remote.DeviceId);
+        string? reason = null;
+        var ask = false;
+        var viaAgreement = false;
+
+        await _gate.WaitAsync();
+        try
+        {
+            if (_memberSession is not null)
+            {
+                reason = $"{Identity.DisplayName} è già in una condivisione";
+            }
+            else if (_hostSession?.Members.ContainsKey(remote.DeviceId) == true)
+            {
+                reason = "sei già nella sessione";
+            }
+            else if (level == AgreementLevel.Anytime || (_visible && level == AgreementLevel.AutoJoin))
+            {
+                // Il patto vale come consenso dato in anticipo: entra subito, con accesso bidirezionale
+                // (l'host può ridurlo dall'elenco dei connessi).
+                _hostSession ??= new HostSession(NewId());
+                try
+                {
+                    await AdmitAsync(connection, ShareDirection.Bidirectional);
+                }
+                catch
+                {
+                    // Risposta non inviata: una sessione creata apposta e rimasta vuota non resta in giro.
+                    if (!_visible && _hostSession is { Members.IsEmpty: true })
+                        _hostSession = null;
+                    throw;
+                }
+
+                viaAgreement = true;
+            }
+            else if (!_visible)
+            {
+                reason = $"{Identity.DisplayName} non si sta offrendo come host";
+            }
+            else if (IsInJoinCooldown(connection))
+            {
+                reason = "hai chiesto da poco: riprova tra qualche secondo";
+            }
+            else
+            {
+                ask = true;
+            }
         }
         finally
         {
-            await _gate.WaitAsync(CancellationToken.None);
-            try
+            _gate.Release();
+        }
+
+        if (viaAgreement)
+        {
+            await AfterAdmittedAsync(remote.DisplayName, ShareDirection.Bidirectional);
+            _notifier.Info($"{remote.DisplayName} è entrato nella tua condivisione (patto {DescribeAgreement(level)}).");
+            return;
+        }
+
+        if (ask)
+        {
+            var (decision, why) = await AskJoinAsync(connection);
+            reason = why;
+            // L'attesa vale per i rifiuti dell'utente, le richieste scadute e quelle annullate da chi
+            // chiedeva; non quando è l'host a smettere di offrirsi o la coda è piena.
+            if (decision == ConsentDecision.Reject && why is null or "richiesta rifiutata" or "nessuna risposta" or "richiesta annullata")
+                StartJoinCooldown(connection);
+            if (decision != ConsentDecision.Reject)
             {
-                if (_hostSession is { } session && session.Id == sessionId)
+                var granted = decision == ConsentDecision.AcceptReadOnly ? ShareDirection.ReadOnly : ShareDirection.Bidirectional;
+                await _gate.WaitAsync();
+                try
                 {
-                    session.PendingInvites--;
-                    // Anche se il membro è stato aggiunto: può essersi già disconnesso mentre questo
-                    // invito era in corso, e OnMemberClosedAsync non ha chiuso la sessione per via
-                    // dell'invito ancora in sospeso.
-                    if (session.Members.IsEmpty && session.PendingInvites == 0)
-                    {
-                        _hostSession = null;
-                        RaiseSessionChanged();
-                    }
+                    reason = _memberSession is not null ? $"{Identity.DisplayName} è già in una condivisione"
+                        : _hostSession is null ? "l'host ha chiuso la sessione"
+                        : _hostSession.Members.ContainsKey(remote.DeviceId) ? "sei già nella sessione"
+                        : connection.IsClosed ? "richiesta annullata"
+                        : null;
+                    if (reason is null)
+                        await AdmitAsync(connection, granted);
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                if (reason is null)
+                {
+                    await AfterAdmittedAsync(remote.DisplayName, granted);
+                    return;
                 }
             }
-            finally
+        }
+
+        reason ??= "richiesta rifiutata";
+        Log($"Richiesta di {remote.DisplayName} rifiutata: {reason}.");
+        try
+        {
+            await connection.SendAsync(new JoinReplyMessage(false, null, ShareDirection.Bidirectional, reason));
+        }
+        catch (Exception ex) when (ex is IOException or MessageTooLargeException)
+        {
+            // Chi chiedeva se n'è già andato.
+        }
+
+        connection.Close("richiesta rifiutata");
+    }
+
+    /// <summary>Chiavi "id:" e "ip:" con la scadenza dell'attesa. Ripulite quando si aggiungono voci.</summary>
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _joinCooldowns = new();
+
+    private const int MaxJoinCooldowns = 1024;
+
+    /// <summary>
+    /// Chi è stato rifiutato (o non ha avuto risposta) aspetta prima di chiedere di nuovo: le identità
+    /// sono gratuite, quindi conta anche l'indirizzo. Il loopback è escluso (istanze sullo stesso PC).
+    /// </summary>
+    private IEnumerable<string> JoinCooldownKeys(PeerConnection connection)
+    {
+        yield return "id:" + connection.Remote.DeviceId;
+        if (connection.RemoteEndPoint is System.Net.IPEndPoint ip && !System.Net.IPAddress.IsLoopback(ip.Address))
+            yield return "ip:" + (ip.Address.IsIPv4MappedToIPv6 ? ip.Address.MapToIPv4() : ip.Address);
+    }
+
+    private bool IsInJoinCooldown(PeerConnection connection)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return JoinCooldownKeys(connection).Any(k => _joinCooldowns.TryGetValue(k, out var until) && until > now);
+    }
+
+    private void StartJoinCooldown(PeerConnection connection)
+    {
+        if (_options.JoinRetryCooldown <= TimeSpan.Zero)
+            return;
+        var now = DateTimeOffset.UtcNow;
+        if (_joinCooldowns.Count >= MaxJoinCooldowns)
+        {
+            foreach (var (key, until) in _joinCooldowns)
             {
-                _gate.Release();
+                if (until <= now)
+                    _joinCooldowns.TryRemove(key, out _);
             }
         }
+
+        if (_joinCooldowns.Count >= MaxJoinCooldowns)
+            return;
+        foreach (var key in JoinCooldownKeys(connection))
+            _joinCooldowns[key] = now + _options.JoinRetryCooldown;
     }
+
+    /// <summary>
+    /// Attende la decisione dell'host: dall'elenco delle richieste o dalla finestra di consenso, che
+    /// compare per una richiesta alla volta (le altre restano nell'elenco).
+    /// </summary>
+    private async Task<(ConsentDecision Decision, string? Reason)> AskJoinAsync(PeerConnection connection)
+    {
+        var remote = connection.Remote;
+        if (_pendingJoins.Count >= MaxPendingJoins)
+            return (ConsentDecision.Reject, "troppe richieste in attesa, riprova tra poco");
+
+        var pending = new PendingJoin(new JoinRequestView(NewId(), remote.DeviceId, remote.DisplayName, remote.UserName, remote.Fingerprint, DateTimeOffset.UtcNow));
+        _pendingJoins[pending.View.RequestId] = pending;
+        connection.Closed += (_, _) => pending.Decide(ConsentDecision.Reject, "richiesta annullata");
+        JoinRequestsChanged?.Invoke(this, EventArgs.Empty);
+        Log($"{remote.DisplayName} chiede di entrare.");
+
+        using var prompt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        try
+        {
+            // Una sola finestra di consenso alla volta: chiunque in rete può chiedere di entrare, e una
+            // raffica di finestre in primo piano sarebbe un disturbo (o un invito al clic sbagliato).
+            if (Interlocked.CompareExchange(ref _consentPending, 1, 0) == 0)
+            {
+                RunInBackground(async () =>
+                {
+                    try
+                    {
+                        var decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint), prompt.Token);
+                        pending.Decide(decision, decision == ConsentDecision.Reject ? "richiesta rifiutata" : null);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Decisa dall'elenco, scaduta o chiusura.
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Trace.WriteLine($"CUS: finestra di consenso non mostrata: {ex}");
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _consentPending, 0);
+                    }
+                });
+            }
+            else
+            {
+                _notifier.Info($"{remote.DisplayName} chiede di entrare: rispondi dall'elenco delle richieste.");
+            }
+
+            try
+            {
+                return await pending.Result.WaitAsync(_options.ConsentTimeout, _lifetime.Token);
+            }
+            catch (TimeoutException)
+            {
+                return (ConsentDecision.Reject, "nessuna risposta");
+            }
+        }
+        finally
+        {
+            prompt.Cancel();
+            _pendingJoins.TryRemove(pending.View.RequestId, out _);
+            JoinRequestsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Risposta positiva e registrazione del membro. Sotto _gate, con _hostSession presente.</summary>
+    private async Task AdmitAsync(PeerConnection connection, ShareDirection granted)
+    {
+        var session = _hostSession!;
+        await connection.SendAsync(new JoinReplyMessage(true, session.Id, granted, null));
+        session.Members[connection.Remote.DeviceId] = new Member(connection, granted);
+        connection.MessageHandler = HostHandleMessageAsync;
+        connection.Closed += (c, reason) => RunInBackground(() => OnMemberClosedAsync(c, reason));
+        connection.Start();
+        RaiseSessionChanged();
+    }
+
+    private async Task AfterAdmittedAsync(string name, ShareDirection granted)
+    {
+        await BroadcastStateAsync();
+        Log(granted == ShareDirection.ReadOnly
+            ? $"{name} è entrato in sola lettura: riceve le copie della sessione ma non invia le sue."
+            : $"{name} è entrato: clipboard condivisa.");
+    }
+
+    // ================================================================ host: permessi
+
+    /// <summary>Cambia la modalità concessa a un membro (il membro può comunque ridurla a sola lettura).</summary>
+    public async Task SetMemberGrantAsync(string deviceId, ShareDirection granted)
+    {
+        if (!Enum.IsDefined(granted))
+            throw new ArgumentOutOfRangeException(nameof(granted));
+        string name;
+        await _gate.WaitAsync();
+        try
+        {
+            if (_hostSession?.Members.TryGetValue(deviceId, out var member) != true)
+                throw new CusOperationException("Il dispositivo non è più nella sessione.");
+            member!.Granted = granted;
+            name = member.Connection.Remote.DisplayName;
+            RaiseSessionChanged();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        await BroadcastStateAsync();
+        Log(granted == ShareDirection.ReadOnly ? $"{name} ora è in sola lettura." : $"{name} ora ha accesso bidirezionale.");
+    }
+
+    /// <summary>
+    /// Permesso temporaneo, solo per questa sessione: i contenuti sensibili copiati dall'host vanno a
+    /// tutti i membri. Senza, vanno solo agli amici marcati come affidabili.
+    /// </summary>
+    public async Task SetSensitiveForAllAsync(bool enabled)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_hostSession is not { } session)
+                throw new CusOperationException("Non stai ospitando una condivisione.");
+            session.SensitiveForAll = enabled;
+            RaiseSessionChanged();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        await BroadcastStateAsync();
+        Log(enabled
+            ? "Contenuti sensibili visibili a tutti i membri, fino alla fine della sessione."
+            : "Contenuti sensibili solo ai membri affidabili.");
+    }
+
+    // ================================================================ host: copie
 
     private async Task HostHandleMessageAsync(PeerConnection connection, CusMessage message)
     {
         if (HandleCommonMessage(connection, message))
             return;
 
-        // Solo la connessione registrata come membro: non una rimasta orfana (sessione chiusa, invito doppio).
+        // Solo la connessione registrata come membro: non una rimasta orfana (sessione chiusa).
         if (CurrentMember(connection) is not { } member)
             return;
 
@@ -189,8 +444,33 @@ public sealed partial class CusNode
                     return;
                 }
 
-                Log($"Ricevuto da {connection.Remote.DisplayName}: {Short(push.Content!)}");
-                await DistributeAsync(connection.Remote.DeviceId, connection.Remote.DisplayName, push.ItemId!, push.Content!, connection);
+                Log(push.Sensitive
+                    ? $"Ricevuto da {connection.Remote.DisplayName}: contenuto sensibile"
+                    : $"Ricevuto da {connection.Remote.DisplayName}: {Short(push.Content!)}");
+                var recipients = push.Sensitive
+                    ? (push.SensitiveRecipients ?? []).Where(id => id is { Length: 32 }).Take(MaxParticipants).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : null;
+                await DistributeAsync(connection.Remote.DeviceId, connection.Remote.DisplayName, push.ItemId!, push.Content!, connection,
+                    sensitive: push.Sensitive, sensitiveRecipients: recipients);
+                break;
+            case SetDirectionMessage set when Enum.IsDefined(set.Direction):
+                await _gate.WaitAsync();
+                try
+                {
+                    if (CurrentMember(connection) is not { } current || current.Chosen == set.Direction)
+                        return;
+                    current.Chosen = set.Direction;
+                    RaiseSessionChanged();
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                await BroadcastStateAsync();
+                Log(set.Direction == ShareDirection.ReadOnly
+                    ? $"{connection.Remote.DisplayName} è passato in sola lettura."
+                    : $"{connection.Remote.DisplayName} è tornato bidirezionale.");
                 break;
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
@@ -273,9 +553,14 @@ public sealed partial class CusNode
 
     /// <summary>
     /// L'host assegna il numero di sequenza e distribuisce: vince sempre l'ultima copia arrivata qui.
+    /// I contenuti sensibili vanno solo a chi li può vedere e non finiscono in cronologia.
     /// </summary>
     /// <param name="localStamp">Per le copie dell'host: quando è avvenuta la copia (vedi _clipboardStamp).</param>
-    private async Task DistributeAsync(string originId, string originName, string itemId, ClipboardContent content, PeerConnection? originConnection, long localStamp = 0)
+    /// <param name="sensitiveRecipients">Copie sensibili di un membro: i partecipanti a cui il membro le concede.</param>
+    /// <returns>A quanti membri è stata inviata (-1 se scartata).</returns>
+    private async Task<int> DistributeAsync(
+        string originId, string originName, string itemId, ClipboardContent content, PeerConnection? originConnection,
+        long localStamp = 0, bool sensitive = false, IReadOnlySet<string>? sensitiveRecipients = null)
     {
         // Una copia di un membro va sempre confermata, qualunque cosa succeda qui: senza conferma il
         // membro la crederebbe in viaggio e ignorerebbe ogni copia successiva.
@@ -284,31 +569,32 @@ public sealed partial class CusNode
         try
         {
             if (_hostSession is not { } session)
-                return;
+                return -1;
 
             // Un identificativo già usato sostituirebbe, nella cronologia e nelle letture dei file,
             // la voce di un altro PC.
             if (originConnection is not null && (session.ItemOrigins.ContainsKey(itemId) || _database.GetHistoryEntry(itemId) is not null))
             {
                 Log($"Copia di {originName} ignorata: identificativo già usato");
-                return;
+                return -1;
             }
 
             // Una copia dell'host superata da una copia remota già scritta nella sua clipboard è
             // vecchia: distribuirla renderebbe la clipboard dell'host diversa da quella dei membri.
             if (originConnection is null && localStamp < Interlocked.Read(ref _lastRemoteWriteStamp))
-                return;
+                return -1;
 
-            var item = new ClipboardItemMessage(itemId, session.Sequence + 1, originId, originName, content);
+            var item = new ClipboardItemMessage(itemId, session.Sequence + 1, originId, originName, content, sensitive);
             if (originConnection is null && item.Serialize().Length > SecureChannel.MaxMessageBytes)
             {
                 _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
-                return;
+                return -1;
             }
 
             var sequence = ++session.Sequence;
             session.RememberOrigin(itemId, originId);
-            _database.AddHistory(new HistoryEntry(itemId, session.Id, sequence, originId, originName, content, DateTimeOffset.UtcNow));
+            if (!sensitive)
+                _database.AddHistory(new HistoryEntry(itemId, session.Id, sequence, originId, originName, content, DateTimeOffset.UtcNow));
 
             if (originConnection is not null)
             {
@@ -316,7 +602,8 @@ public sealed partial class CusNode
                 var source = content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, originConnection, itemId) : null;
                 try
                 {
-                    await _writer.WriteAsync(content, source);
+                    await _writer.WriteAsync(content with { IsMarkedSensitive = sensitive }, source);
+                    SetCurrentClipboard(ClipboardSummary.From(content, originId, originName, sensitive, isShared: true));
                 }
                 catch (Exception ex)
                 {
@@ -336,16 +623,24 @@ public sealed partial class CusNode
                 }
             }
 
-            // Invii in parallelo, ognuno con il proprio timeout (PeerConnection.SendTimeout): un membro
-            // lento non ritarda gli altri e non tiene _gate oltre quel limite.
+            // Sensibili: le copie dell'host vanno ai membri affidabili (o a tutti col permesso
+            // temporaneo della sessione); quelle di un membro solo a chi ha scelto lui.
             var targets = session.Members.Values
                 .Where(m => m.Connection != originConnection)
+                .Where(m => !sensitive || (originConnection is null
+                    ? session.SensitiveForAll || Friends.TrustsWithSensitive(m.Connection.Remote.DeviceId)
+                    : sensitiveRecipients?.Contains(m.Connection.Remote.DeviceId) == true))
                 .ToList();
+
+            // Invii in parallelo, ognuno con il proprio timeout (PeerConnection.SendTimeout): un membro
+            // lento non ritarda gli altri e non tiene _gate oltre quel limite.
             await Task.WhenAll(targets.Select(member => SendItemAsync(member.Connection, item)));
+            return targets.Count;
         }
         catch (Exception ex)
         {
             _notifier.Error($"Distribuzione della copia non riuscita: {ex.Message}");
+            return -1;
         }
         finally
         {
@@ -394,9 +689,13 @@ public sealed partial class CusNode
                 session.Members.TryRemove(connection.Remote.DeviceId, out _);
                 changed = true;
                 Log($"{connection.Remote.DisplayName} è uscito dalla sessione ({reason}).");
-                if (session.Members.IsEmpty && session.PendingInvites == 0)
+
+                // Senza membri la sessione finisce. Mentre ci si offre ne parte subito una nuova, vuota:
+                // chi entra dopo non eredita la cronologia né il permesso temporaneo per le password
+                // dati ai membri di prima.
+                if (session.Members.IsEmpty)
                 {
-                    _hostSession = null;
+                    _hostSession = _visible ? new HostSession(NewId()) : null;
                     Log("Nessun membro rimasto: sessione terminata.");
                 }
 
@@ -420,7 +719,7 @@ public sealed partial class CusNode
         try
         {
             session = _hostSession;
-            state = session is null ? null : new SessionStateMessage(session.Id, session.Participants(Identity));
+            state = session is null ? null : new SessionStateMessage(session.Id, session.Participants(Identity), session.SensitiveForAll);
         }
         finally
         {
@@ -444,96 +743,129 @@ public sealed partial class CusNode
 
     // ================================================================ membro
 
-    private async Task HandleInviteAsync(PeerConnection connection, SessionInviteMessage invite)
+    /// <summary>
+    /// Chiede di entrare nella sessione di un host visibile (o di un amico con patto "in qualsiasi
+    /// momento"). L'host decide se far entrare e con quale modalità; attende la sua risposta.
+    /// </summary>
+    /// <param name="expectedDeviceId">
+    /// Per i peer scelti dall'elenco: l'identità annunciata. Gli annunci non sono autenticati, quindi
+    /// si verifica che il canale cifrato appartenga davvero a quel dispositivo prima di condividere.
+    /// </param>
+    public async Task<JoinResult> JoinAsync(string host, int port, string? expectedDeviceId = null, CancellationToken cancellationToken = default)
     {
-        var remote = connection.Remote;
-        var requested = invite.Direction;
-        ConsentDecision decision;
-        string? reason = null;
+        if (Interlocked.CompareExchange(ref _joining, 1, 0) != 0)
+            throw new CusOperationException("C'è già una richiesta di ingresso in corso.");
+        var wasVisible = _visible;
+        var joined = false;
+        try
+        {
+            if (_memberSession is not null)
+                throw new CusOperationException("Sei già in una condivisione: esci prima di entrare in un'altra.");
+            if (_hostSession is { Members.IsEmpty: false })
+                throw new CusOperationException("Stai ospitando una condivisione: chiudila prima di entrare in un'altra.");
 
-        if (!Enum.IsDefined(requested))
-        {
-            decision = ConsentDecision.Reject;
-            reason = "richiesta non valida";
-        }
-        else if (_hostSession is not null || _memberSession is not null)
-        {
-            decision = ConsentDecision.Reject;
-            reason = "è già in un'altra sessione";
-        }
-        else if (Trust.State.IsTrusted(remote.DeviceId))
-        {
-            decision = ConsentDecision.Accept;
-            _notifier.Info(requested == ShareDirection.ReadOnly
-                ? $"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te in sola lettura."
-                : $"{remote.DisplayName} (tuo dispositivo abbinato) condivide la clipboard con te.");
-        }
-        else if (Interlocked.CompareExchange(ref _consentPending, 1, 0) != 0)
-        {
-            // Una sola richiesta di consenso alla volta: chiunque in rete può mandarne, e una raffica
-            // di finestre in primo piano sarebbe un disturbo (o un invito al clic sbagliato).
-            decision = ConsentDecision.Reject;
-            reason = "c'è già un'altra richiesta in attesa di risposta, riprova tra poco";
-        }
-        else
-        {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            timeout.CancelAfter(_options.ConsentTimeout);
+            // Chi entra in una sessione altrui smette di offrirsi.
+            if (_visible)
+                await SetVisibleAsync(false);
+
+            var connection = await ConnectAsync(host, port, cancellationToken);
+            var remote = connection.Remote;
+            if (expectedDeviceId is not null && !string.Equals(remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                connection.Close("identità diversa da quella annunciata");
+                throw new CusOperationException(
+                    $"Il dispositivo a {new PeerEndpoint(host, port)} non è quello scelto: la sua identità ({remote.Fingerprint}) "
+                    + "non corrisponde a quella annunciata in rete. Richiesta annullata.");
+            }
+
+            Log($"Richiesta di ingresso inviata a {remote.DisplayName} (impronta {remote.Fingerprint}): in attesa della risposta...");
+            JoinReplyMessage reply;
             try
             {
-                decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint, requested), timeout.Token);
+                await connection.SendAsync(new JoinRequestMessage(), cancellationToken);
+                reply = await connection.ReceiveAsync<JoinReplyMessage>(_options.ConsentTimeout + TimeSpan.FromSeconds(15), cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is not CusOperationException)
             {
-                decision = ConsentDecision.Reject;
-                reason = "nessuna risposta";
+                connection.Close("errore");
+                throw new CusOperationException($"Richiesta a {remote.DisplayName} non riuscita: {Describe(ex)}", ex);
             }
-            catch (Exception ex)
+
+            if (!reply.Accepted)
             {
-                System.Diagnostics.Trace.WriteLine($"CUS: richiesta di consenso fallita: {ex}");
-                decision = ConsentDecision.Reject;
-                reason = "richiesta non mostrata";
+                var reason = DisplayText.Sanitize(reply.Reason, 200, "richiesta rifiutata");
+                connection.Close("rifiutata");
+                Log($"{remote.DisplayName} ha rifiutato: {reason}.");
+                return new JoinResult(JoinOutcome.Rejected, remote.DisplayName, reason);
+            }
+
+            var granted = Enum.IsDefined(reply.Granted) ? reply.Granted : ShareDirection.ReadOnly;
+            var sessionId = reply.SessionId is { Length: > 0 and <= 64 } id ? id : NewId();
+            await _gate.WaitAsync();
+            try
+            {
+                // Nel frattempo questo PC può essere diventato host (un amico si è collegato).
+                if (_memberSession is not null || _hostSession is { Members.IsEmpty: false })
+                {
+                    await connection.CloseAsync("già in un'altra sessione");
+                    throw new CusOperationException("Nel frattempo è iniziata un'altra condivisione su questo PC.");
+                }
+
+                _hostSession = null;
+                _visible = false;
+                _memberSession = new MemberSession(sessionId, connection, granted);
+                connection.MessageHandler = MemberHandleMessageAsync;
+                connection.Closed += (c, why) => RunInBackground(() => OnHostClosedAsync(c, why));
+                connection.Start();
+                RaiseSessionChanged();
             }
             finally
             {
-                Interlocked.Exchange(ref _consentPending, 0);
+                _gate.Release();
             }
 
-            if (decision == ConsentDecision.Reject)
-                reason ??= "richiesta rifiutata";
+            joined = true;
+            Log(granted == ShareDirection.ReadOnly
+                ? $"Sei entrato nella condivisione di {remote.DisplayName} in sola lettura."
+                : $"Sei entrato nella condivisione di {remote.DisplayName}.");
+            return new JoinResult(granted == ShareDirection.ReadOnly ? JoinOutcome.AcceptedReadOnly : JoinOutcome.Accepted, remote.DisplayName, null);
         }
+        finally
+        {
+            // Richiesta rifiutata o fallita: chi si offriva torna visibile, come prima di chiedere.
+            if (!joined && wasVisible && _memberSession is null)
+            {
+                try
+                {
+                    await SetVisibleAsync(true, fromJoin: true);
+                }
+                catch (CusOperationException)
+                {
+                }
+            }
 
+            Interlocked.Exchange(ref _joining, 0);
+        }
+    }
+
+    /// <summary>
+    /// Membro con accesso bidirezionale: passa a sola lettura o torna bidirezionale. In sola lettura
+    /// le copie fatte qui restano qui, subito, anche prima che l'host lo sappia.
+    /// </summary>
+    public async Task SetMyDirectionAsync(ShareDirection direction)
+    {
+        if (!Enum.IsDefined(direction))
+            throw new ArgumentOutOfRangeException(nameof(direction));
+        MemberSession session;
         await _gate.WaitAsync();
         try
         {
-            if (decision != ConsentDecision.Reject && (_hostSession is not null || _memberSession is not null))
-            {
-                decision = ConsentDecision.Reject;
-                reason = "è già in un'altra sessione";
-            }
-
-            // Un invito in sola lettura resta tale anche se qui si è risposto "consenti".
-            var direction = requested == ShareDirection.ReadOnly || decision == ConsentDecision.AcceptReadOnly
-                ? ShareDirection.ReadOnly
-                : ShareDirection.Bidirectional;
-            if (decision != ConsentDecision.Reject)
-                decision = direction == ShareDirection.ReadOnly ? ConsentDecision.AcceptReadOnly : ConsentDecision.Accept;
-
-            await connection.SendAsync(new SessionInviteReplyMessage(decision, reason));
-            if (decision == ConsentDecision.Reject)
-            {
-                connection.Close("rifiutata");
-                return;
-            }
-
-            _memberSession = new MemberSession(invite.SessionId, connection, direction, new SessionView(invite.SessionId, SessionRole.Member,
-            [
-                new SessionParticipant(remote.DisplayName, ShareDirection.Bidirectional, IsHost: true),
-                new SessionParticipant(Identity.DisplayName, direction, IsHost: false),
-            ]));
-            connection.MessageHandler = MemberHandleMessageAsync;
-            connection.Closed += (c, why) => RunInBackground(() => OnHostClosedAsync(c, why));
-            connection.Start();
+            if (_memberSession is not { } current)
+                throw new CusOperationException("Non sei membro di una condivisione.");
+            if (direction == ShareDirection.Bidirectional && current.Granted == ShareDirection.ReadOnly)
+                throw new CusOperationException("L'host ti ha concesso solo la sola lettura.");
+            session = current;
+            session.Chosen = direction;
             RaiseSessionChanged();
         }
         finally
@@ -541,8 +873,24 @@ public sealed partial class CusNode
             _gate.Release();
         }
 
-        Log($"Sessione con {remote.DisplayName} avviata.");
+        try
+        {
+            await session.Host.SendAsync(new SetDirectionMessage(direction));
+        }
+        catch (IOException)
+        {
+            // Host caduto: la sessione si chiude in OnHostClosedAsync.
+        }
+
+        Log(direction == ShareDirection.ReadOnly
+            ? "Sola lettura: ricevi le copie della sessione, le tue restano su questo PC."
+            : "Bidirezionale: le tue copie tornano a essere condivise.");
     }
+
+    private Task ToggleMyDirectionAsync() =>
+        _memberSession is { } session
+            ? SetMyDirectionAsync(session.Direction == ShareDirection.ReadOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly)
+            : Task.CompletedTask;
 
     private async Task MemberHandleMessageAsync(PeerConnection connection, CusMessage message)
     {
@@ -557,10 +905,15 @@ public sealed partial class CusNode
                 {
                     if (_memberSession is { } session && session.Host == connection)
                     {
-                        session.View = new SessionView(state.SessionId, SessionRole.Member,
-                            (state.Participants ?? []).Where(p => p is not null).Take(64).Select(p => new SessionParticipant(
-                                p.DeviceId == Identity.DeviceId ? $"{DisplayText.Sanitize(p.DisplayName, 64)} (tu)" : DisplayText.Sanitize(p.DisplayName, 64),
-                                p.Direction, p.IsHost)).ToList());
+                        var participants = (state.Participants ?? [])
+                            .Where(p => p is not null && p.DeviceId is { Length: 32 } && Enum.IsDefined(p.Direction) && Enum.IsDefined(p.Granted))
+                            .Take(MaxParticipants)
+                            .Select(p => p with { DisplayName = DisplayText.Sanitize(p.DisplayName, 64) })
+                            .ToList();
+                        if (participants.FirstOrDefault(p => p.DeviceId == Identity.DeviceId) is { } self)
+                            session.Granted = self.Granted;
+                        session.Participants = participants;
+                        session.SensitiveForAll = state.SensitiveForAll;
                         RaiseSessionChanged();
                     }
                 }
@@ -589,6 +942,10 @@ public sealed partial class CusNode
                 }
 
                 break;
+            case AgreementProposalMessage proposal:
+                // La risposta arriva dopo la scelta dell'utente: non si blocca la ricezione delle copie.
+                RunInBackground(() => HandleAgreementProposalAsync(connection, proposal));
+                break;
             case SessionEndedMessage ended:
                 _notifier.Info($"Sessione terminata: {DisplayText.Sanitize(ended.Reason, 200, "chiusa dall'host")}.");
                 if (_memberSession is { } current && current.Host == connection)
@@ -612,6 +969,7 @@ public sealed partial class CusNode
             return;
         }
 
+        var originName = DisplayText.Sanitize(item.OriginName, 64);
         await _gate.WaitAsync();
         try
         {
@@ -624,7 +982,9 @@ public sealed partial class CusNode
             if (session.PendingPushes.Count > 0)
                 return;
             var source = item.Content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, connection, item.ItemId!) : null;
-            await _writer.WriteAsync(item.Content, source);
+            await _writer.WriteAsync(item.Content with { IsMarkedSensitive = item.Sensitive }, source);
+            var originId = item.OriginDeviceId is { Length: 32 } id ? id : connection.Remote.DeviceId;
+            SetCurrentClipboard(ClipboardSummary.From(item.Content, originId, originName, item.Sensitive, isShared: true));
         }
         catch (Exception ex)
         {
@@ -636,7 +996,7 @@ public sealed partial class CusNode
             _gate.Release();
         }
 
-        Log($"Ricevuto da {DisplayText.Sanitize(item.OriginName, 64)}: {Short(item.Content)}");
+        Log(item.Sensitive ? $"Ricevuto da {originName}: contenuto sensibile" : $"Ricevuto da {originName}: {Short(item.Content)}");
     }
 
     private async Task OnHostClosedAsync(PeerConnection connection, string reason)
@@ -665,18 +1025,23 @@ public sealed partial class CusNode
 
     // ================================================================ comuni
 
-    /// <summary>Esce dalla sessione (membro) o la chiude per tutti (host).</summary>
+    /// <summary>Esce dalla sessione (membro) o la chiude per tutti e smette di offrirsi (host).</summary>
     public async Task LeaveSessionAsync()
     {
         HostSession? host;
         MemberSession? member;
+        var wasVisible = false;
+        List<PendingJoin> rejected = [];
         await _gate.WaitAsync();
         try
         {
             host = _hostSession;
             member = _memberSession;
+            wasVisible = _visible;
             _hostSession = null;
             _memberSession = null;
+            _visible = false;
+            rejected.AddRange(_pendingJoins.Values);
             if (member is not null)
                 member.Leaving = true;
             if (host is not null || member is not null)
@@ -686,6 +1051,13 @@ public sealed partial class CusNode
         {
             _gate.Release();
         }
+
+        foreach (var pending in rejected)
+            pending.Decide(ConsentDecision.Reject, "l'host ha chiuso la sessione");
+
+        if (wasVisible && _discovery is { } discovery)
+            await TryAnnounceAsync(() => discovery.AnnounceHiddenAsync(
+                new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port)));
 
         if (host is not null)
         {
@@ -718,7 +1090,7 @@ public sealed partial class CusNode
             member.Host.Close("uscito dalla sessione");
         }
 
-        if (host is not null || member is not null)
+        if (host is { Members.IsEmpty: false } || member is not null)
             Log("Sessione terminata.");
     }
 
@@ -728,54 +1100,90 @@ public sealed partial class CusNode
             return;
 
         var content = e.Content;
+        var sensitive = content.IsMarkedSensitive;
         var itemId = NewId();
         var stamp = Interlocked.Increment(ref _clipboardStamp);
-        lock (_offerGate)
-            _localOffer = content.Kind == ClipboardContentKind.Files && content.Files is { } files ? (itemId, files) : null;
+        RegisterLocalOffer(itemId, content);
+        var shared = await ShareLocalCopyAsync(itemId, content, sensitive, stamp);
+        if (shared)
+            MarkOfferShared(itemId);
+        SetCurrentClipboard(ClipboardSummary.From(content, Identity.DeviceId, Identity.DisplayName, sensitive, shared));
+    }
 
+    /// <returns>True se la copia è uscita da questo PC (verso almeno un altro partecipante).</returns>
+    private async Task<bool> ShareLocalCopyAsync(string itemId, ClipboardContent content, bool sensitive, long stamp)
+    {
         // Sola lettura: le copie fatte su questo PC non escono.
         if (_memberSession is { Direction: ShareDirection.ReadOnly })
-            return;
-
-        if (content.IsMarkedSensitive)
-        {
-            if (Session is not null)
-                Log("Contenuto marcato come sensibile da un password manager: non condiviso.");
-            return;
-        }
+            return false;
+        if (_hostSession is { Members.IsEmpty: true })
+            return false;
+        if (_hostSession is null && _memberSession is null)
+            return false;
 
         if (!IsAcceptableContent(content, out var why))
         {
-            if (Session is not null)
-                _notifier.Error($"Copia non condivisa: {why}");
-            return;
+            _notifier.Error($"Copia non condivisa: {why}");
+            return false;
         }
 
         if (_hostSession is not null)
         {
-            Log($"Condiviso: {Short(content)}");
-            await DistributeAsync(Identity.DeviceId, Identity.DisplayName, itemId, content, null, stamp);
+            var sent = await DistributeAsync(Identity.DeviceId, Identity.DisplayName, itemId, content, null, stamp, sensitive);
+            if (sensitive)
+            {
+                Log(sent > 0
+                    ? $"Contenuto sensibile condiviso con {sent} {(sent == 1 ? "membro affidabile" : "membri")}."
+                    : "Contenuto sensibile: nessun membro può vederlo, resta su questo PC.");
+                return sent > 0;
+            }
+
+            if (sent >= 0)
+                Log($"Condiviso: {Short(content)}");
+            return sent >= 0;
         }
-        else if (_memberSession is { } member)
+
+        if (_memberSession is not { } member)
+            return false;
+
+        IReadOnlyList<string>? recipients = null;
+        if (sensitive)
         {
-            // In attesa prima dell'invio: la conferma dell'host può arrivare prima che SendAsync ritorni.
-            await SetPendingPushAsync(member, itemId, pending: true);
-            try
+            // Un contenuto sensibile di un membro passa dall'host: esce solo se il membro si fida
+            // dell'host, e l'host lo inoltra solo ai partecipanti di cui il membro si fida.
+            var hostId = member.Host.Remote.DeviceId;
+            if (!Friends.TrustsWithSensitive(hostId))
             {
-                await member.Host.SendAsync(new ClipboardPushMessage(itemId, content));
-                Log($"Inviato all'host: {Short(content)}");
+                Log("Contenuto marcato come sensibile: l'host non è tra i tuoi affidabili, resta su questo PC.");
+                return false;
             }
-            catch (MessageTooLargeException)
-            {
-                await SetPendingPushAsync(member, itemId, pending: false);
-                _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
-            }
-            catch (IOException)
-            {
-                // L'host è caduto: la sessione si chiude in OnHostClosedAsync.
-                await SetPendingPushAsync(member, itemId, pending: false);
-            }
+
+            recipients = member.Participants
+                .Where(p => p.DeviceId != hostId && p.DeviceId != Identity.DeviceId && Friends.TrustsWithSensitive(p.DeviceId))
+                .Select(p => p.DeviceId)
+                .ToList();
         }
+
+        // In attesa prima dell'invio: la conferma dell'host può arrivare prima che SendAsync ritorni.
+        await SetPendingPushAsync(member, itemId, pending: true);
+        try
+        {
+            await member.Host.SendAsync(new ClipboardPushMessage(itemId, content, sensitive, recipients));
+            Log(sensitive ? "Inviato all'host: contenuto sensibile" : $"Inviato all'host: {Short(content)}");
+            return true;
+        }
+        catch (MessageTooLargeException)
+        {
+            await SetPendingPushAsync(member, itemId, pending: false);
+            _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
+        }
+        catch (IOException)
+        {
+            // L'host è caduto: la sessione si chiude in OnHostClosedAsync.
+            await SetPendingPushAsync(member, itemId, pending: false);
+        }
+
+        return false;
     }
 
     private async Task SetPendingPushAsync(MemberSession member, string itemId, bool pending)
@@ -823,12 +1231,8 @@ public sealed partial class CusNode
         {
             if (entry.OriginDeviceId == Identity.DeviceId)
             {
-                lock (_offerGate)
-                {
-                    if (_localOffer?.ItemId != entry.ItemId)
-                        throw new CusOperationException("I file non sono più disponibili: su questo PC è stato copiato altro.");
-                }
-
+                if (!IsCurrentOffer(entry.ItemId))
+                    throw new CusOperationException("I file non sono più disponibili: su questo PC è stato copiato altro.");
                 source = new LocalFileSource(this, entry.ItemId);
             }
             else if (_memberSession is { } member)
@@ -846,6 +1250,7 @@ public sealed partial class CusNode
         }
 
         await _writer.WriteAsync(entry.Content, source);
+        SetCurrentClipboard(ClipboardSummary.From(entry.Content, entry.OriginDeviceId, DisplayText.Sanitize(entry.OriginName, 64), false, isShared: false));
     }
 
     private async Task<HistoryEntry> LoadFullHistoryEntryAsync(HistoryEntry preview)
@@ -872,113 +1277,6 @@ public sealed partial class CusNode
 
         return _database.GetHistoryEntry(preview.ItemId)
             ?? throw new CusOperationException("Voce non più presente nella cronologia.");
-    }
-
-    // ================================================================ file lazy
-
-    private async Task ServeFileReadAsync(PeerConnection connection, FileReadRequestMessage request)
-    {
-        FileReadReplyMessage reply;
-        var acquired = false;
-        try
-        {
-            // Ogni lettura tiene in memoria fino a 1 MB: un numero limitato alla volta.
-            acquired = await _fileReadSlots.WaitAsync(FileReadTimeout, _lifetime.Token);
-            if (!acquired)
-                throw new RemoteFileUnavailableException("Il PC d'origine è occupato a servire altre letture: riprova.");
-            var data = await ReadFileForPeerAsync(connection, request);
-            reply = new FileReadReplyMessage(request.RequestId, data, null);
-        }
-        catch (RemoteFileUnavailableException ex)
-        {
-            reply = new FileReadReplyMessage(request.RequestId, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            reply = new FileReadReplyMessage(request.RequestId, null, $"Lettura del file non riuscita sul PC d'origine: {ex.Message}");
-        }
-        finally
-        {
-            if (acquired)
-                _fileReadSlots.Release();
-        }
-
-        try
-        {
-            await connection.SendAsync(reply);
-        }
-        catch (IOException)
-        {
-            // Chi ha chiesto si è disconnesso.
-        }
-    }
-
-    private async Task<byte[]> ReadFileForPeerAsync(PeerConnection connection, FileReadRequestMessage request)
-    {
-        var host = _hostSession;
-        var member = _memberSession;
-        var hostMember = host?.Members.Values.FirstOrDefault(m => m.Connection == connection);
-        var inSession = hostMember is not null || member?.Host == connection;
-        if (!inSession)
-            throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo non è nella sessione.");
-
-        // In sola lettura nessun file di questo PC è stato condiviso: vale anche se l'host li chiede comunque.
-        if (member?.Host == connection && member.Direction == ShareDirection.ReadOnly)
-            throw new RemoteFileUnavailableException("Richiesta non autorizzata: questo PC partecipa in sola lettura.");
-
-        if (TryReadLocalOffer(request.ItemId, request.FileIndex, request.Offset, request.Count, out var data))
-            return data;
-
-        if (host is not null)
-        {
-            var originId = host.ItemOrigins.TryGetValue(request.ItemId, out var id)
-                ? id
-                : _database.GetHistoryEntry(request.ItemId)?.OriginDeviceId;
-            if (originId is not null && originId != Identity.DeviceId)
-            {
-                if (!host.Members.TryGetValue(originId, out var origin) || origin.Connection == connection)
-                    throw new RemoteFileUnavailableException("Il PC d'origine non è più nella sessione.");
-                var relayed = await new RemoteFileSource(this, origin.Connection, request.ItemId, notify: false)
-                    .ReadAsync(request.FileIndex, request.Offset, request.Count);
-                return relayed;
-            }
-        }
-
-        throw new RemoteFileUnavailableException("Il PC d'origine ha già copiato altro: copia di nuovo i file.");
-    }
-
-    internal bool TryReadLocalOffer(string itemId, int fileIndex, long offset, int count, out byte[] data)
-    {
-        data = [];
-        IReadOnlyList<ClipboardFileInfo> files;
-        lock (_offerGate)
-        {
-            if (_localOffer is not { } offer || offer.ItemId != itemId)
-                return false;
-            files = offer.Files;
-        }
-
-        if (fileIndex < 0 || fileIndex >= files.Count || files[fileIndex].LocalPath is not { } path)
-            throw new RemoteFileUnavailableException("File richiesto non valido.");
-        if (offset < 0 || count <= 0)
-            throw new RemoteFileUnavailableException("Intervallo richiesto non valido.");
-
-        count = Math.Min(count, MaxFileReadBytes);
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (offset >= stream.Length)
-                return true;
-            stream.Seek(offset, SeekOrigin.Begin);
-            var buffer = new byte[(int)Math.Min(count, stream.Length - offset)];
-            stream.ReadExactly(buffer);
-            data = buffer;
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new RemoteFileUnavailableException($"Il file '{files[fileIndex].Name}' non è più leggibile sul PC d'origine: {ex.Message}");
-        }
     }
 
     private static bool IsAcceptableContent(ClipboardContent content, out string reason)
@@ -1026,29 +1324,65 @@ public sealed partial class CusNode
 
         public long Sequence { get; set; }
 
-        public int PendingInvites { get; set; }
+        /// <summary>Permesso temporaneo: i contenuti sensibili dell'host vanno a tutti, fino alla fine della sessione.</summary>
+        public bool SensitiveForAll { get; set; }
 
         public IReadOnlyList<ParticipantDto> Participants(DeviceIdentity self) =>
         [
             new ParticipantDto(self.DeviceId, self.DisplayName, ShareDirection.Bidirectional, IsHost: true),
-            .. Members.Values.Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.Connection.Remote.DisplayName, m.Direction, IsHost: false)),
+            .. Members.Values
+                .OrderBy(m => m.JoinedUtc)
+                .Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.Connection.Remote.DisplayName, m.Direction, IsHost: false, m.Granted)),
         ];
 
-        public SessionView ToView(DeviceIdentity self) => new(Id, SessionRole.Host,
-            Participants(self).Select(p => new SessionParticipant(p.IsHost ? $"{p.DisplayName} (tu)" : p.DisplayName, p.Direction, p.IsHost)).ToList());
+        public SessionView ToView(DeviceIdentity self, bool visible) => new(
+            Id,
+            SessionRole.Host,
+            Participants(self).Select(p => new SessionParticipant(p.DeviceId, p.DisplayName, p.Direction, p.Granted, p.IsHost, p.DeviceId == self.DeviceId)).ToList(),
+            visible,
+            SensitiveForAll,
+            ShareDirection.Bidirectional,
+            ShareDirection.Bidirectional);
     }
 
-    private sealed record Member(PeerConnection Connection, ShareDirection Direction);
+    /// <summary>Membro visto dall'host. Modificato sotto _gate.</summary>
+    private sealed class Member(PeerConnection connection, ShareDirection granted)
+    {
+        public PeerConnection Connection { get; } = connection;
 
-    private sealed class MemberSession(string id, PeerConnection host, ShareDirection direction, SessionView view)
+        public DateTimeOffset JoinedUtc { get; } = DateTimeOffset.UtcNow;
+
+        /// <summary>Modalità concessa dall'host.</summary>
+        public ShareDirection Granted { get; set; } = granted;
+
+        /// <summary>Modalità scelta dal membro (può solo ridurre quella concessa).</summary>
+        public ShareDirection Chosen { get; set; } = ShareDirection.Bidirectional;
+
+        public ShareDirection Direction => Granted == ShareDirection.ReadOnly || Chosen == ShareDirection.ReadOnly
+            ? ShareDirection.ReadOnly
+            : ShareDirection.Bidirectional;
+    }
+
+    private sealed class MemberSession(string id, PeerConnection host, ShareDirection granted)
     {
         public string Id { get; } = id;
 
         public PeerConnection Host { get; } = host;
 
-        public ShareDirection Direction { get; } = direction;
+        /// <summary>Modalità concessa dall'host (aggiornata dallo stato della sessione).</summary>
+        public ShareDirection Granted { get; set; } = granted;
 
-        public SessionView View { get; set; } = view;
+        /// <summary>Modalità scelta da questo PC.</summary>
+        public ShareDirection Chosen { get; set; } = ShareDirection.Bidirectional;
+
+        public ShareDirection Direction => Granted == ShareDirection.ReadOnly || Chosen == ShareDirection.ReadOnly
+            ? ShareDirection.ReadOnly
+            : ShareDirection.Bidirectional;
+
+        /// <summary>Partecipanti come li descrive l'host; vuoto finché non arriva il primo stato.</summary>
+        public IReadOnlyList<ParticipantDto> Participants { get; set; } = [];
+
+        public bool SensitiveForAll { get; set; }
 
         public long LastSequence { get; set; }
 
@@ -1058,10 +1392,46 @@ public sealed partial class CusNode
 
         /// <summary>Copie inviate all'host di cui non è ancora arrivata la conferma.</summary>
         public HashSet<string> PendingPushes { get; } = [];
+
+        public SessionView ToView(DeviceIdentity self)
+        {
+            IReadOnlyList<ParticipantDto> participants = Participants.Count > 0
+                ? Participants
+                :
+                [
+                    new ParticipantDto(Host.Remote.DeviceId, Host.Remote.DisplayName, ShareDirection.Bidirectional, IsHost: true),
+                    new ParticipantDto(self.DeviceId, self.DisplayName, Direction, IsHost: false, Granted),
+                ];
+            return new SessionView(
+                Id,
+                SessionRole.Member,
+                participants.Select(p => p.DeviceId == self.DeviceId
+                    // Per sé conta la scelta locale, applicata subito anche prima che l'host la confermi.
+                    ? new SessionParticipant(p.DeviceId, p.DisplayName, Direction, Granted, p.IsHost, IsSelf: true)
+                    : new SessionParticipant(p.DeviceId, p.DisplayName, p.Direction, p.Granted, p.IsHost, IsSelf: false)).ToList(),
+                IsVisible: false,
+                SensitiveForAll,
+                Granted,
+                Direction);
+        }
+    }
+
+    /// <summary>Richiesta di ingresso in attesa: la prima decisione (elenco, finestra, scadenza) vince.</summary>
+    private sealed class PendingJoin(JoinRequestView view)
+    {
+        private readonly TaskCompletionSource<(ConsentDecision, string?)> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public JoinRequestView View { get; } = view;
+
+        public Task<(ConsentDecision Decision, string? Reason)> Result => _result.Task;
+
+        public bool Decide(ConsentDecision decision, string? reason) => _result.TrySetResult((decision, reason));
     }
 
     /// <summary>File da leggere da un altro PC: tramite l'host per i membri, direttamente dall'origine per l'host.</summary>
-    private sealed class RemoteFileSource(CusNode node, PeerConnection connection, string itemId, bool notify = true) : IRemoteFileSource
+    /// <param name="forDeviceId">L'host che inoltra per un membro: chi incolla davvero, da mostrare al PC d'origine.</param>
+    private sealed class RemoteFileSource(
+        CusNode node, PeerConnection connection, string itemId, bool notify = true, string? forDeviceId = null, string? forName = null) : IRemoteFileSource
     {
         public async Task<byte[]> ReadAsync(int fileIndex, long offset, int count, CancellationToken cancellationToken = default)
         {
@@ -1074,7 +1444,7 @@ public sealed partial class CusNode
                 try
                 {
                     reply = await connection.RequestAsync<FileReadReplyMessage>(
-                        id => new FileReadRequestMessage(id, itemId, fileIndex, offset, Math.Min(count, MaxFileReadBytes)),
+                        id => new FileReadRequestMessage(id, itemId, fileIndex, offset, Math.Min(count, MaxFileReadBytes), forDeviceId, forName),
                         FileReadTimeout, cancellationToken);
                 }
                 catch (IOException)
@@ -1106,7 +1476,7 @@ public sealed partial class CusNode
     private sealed class LocalFileSource(CusNode node, string itemId) : IRemoteFileSource
     {
         public Task<byte[]> ReadAsync(int fileIndex, long offset, int count, CancellationToken cancellationToken = default) =>
-            node.TryReadLocalOffer(itemId, fileIndex, offset, count, out var data)
+            node.TryReadLocalOffer(itemId, fileIndex, offset, count, node.Identity.DeviceId, node.Identity.DisplayName, out var data)
                 ? Task.FromResult(data)
                 : throw new RemoteFileUnavailableException("Su questo PC è stato copiato altro: i file non sono più disponibili.");
     }

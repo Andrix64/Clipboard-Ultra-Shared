@@ -1,12 +1,15 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
+using Cus.Core.Friends;
 using Cus.Core.Hosting;
 using Cus.Core.Node;
 using Cus.Core.Storage;
-using Cus.Core.Trust;
 
 namespace Cus.UI;
 
@@ -15,11 +18,12 @@ public partial class MainWindow : Window
     private const int MaxActivityLines = 200;
 
     private readonly MainWindowModel _model;
-    private readonly List<PeerView> _peers = [];
     private readonly List<HistoryEntry> _history = [];
-    private readonly List<TrustedDevice> _devices = [];
-    private readonly List<(Button Button, Control Page)> _pages = [];
-    private IDisposable? _codeTimer;
+    private readonly List<(Button Button, Control Page)> _leftPages = [];
+    private readonly List<(Button Button, Control Page)> _rightPages = [];
+
+    /// <summary>Firma dell'ultimo elenco dei peer disegnato: si ridisegna solo se cambia.</summary>
+    private string _peersSignature = "";
 
     /// <summary>Arresto del nodo avviato (un secondo clic su chiudi non lo ripete).</summary>
     private bool _shutdownStarted;
@@ -27,11 +31,8 @@ public partial class MainWindow : Window
     /// <summary>Arresto concluso: la prossima chiusura è quella vera.</summary>
     private bool _closeAllowed;
 
-    /// <summary>Aggiornamento della lista dei peer in corso: la selezione cambia, ma non per mano dell'utente.</summary>
-    private bool _refreshingPeers;
-
-    /// <summary>Modalità dei prossimi inviti, scelta con il pulsante accanto a INVITA.</summary>
-    private ShareDirection _inviteDirection = ShareDirection.Bidirectional;
+    /// <summary>Uscita chiesta dall'area di notifica (o dal sistema): niente riduzione in background.</summary>
+    private bool _exitRequested;
 
     /// <summary>Usato solo dal designer di Avalonia.</summary>
     public MainWindow()
@@ -53,8 +54,8 @@ public partial class MainWindow : Window
             LcdParticipants.Text = "Avvio non riuscito";
             StartupErrorPanel.IsVisible = true;
             StartupErrorText.Text = error;
-            Controls.IsVisible = false;
-            Side.IsEnabled = false;
+            LeftSide.IsEnabled = false;
+            RightSide.IsEnabled = false;
             return;
         }
 
@@ -63,25 +64,35 @@ public partial class MainWindow : Window
 
         node.Activity += line => Post(() => AddActivity(line));
         node.SessionChanged += (_, _) => Post(RefreshSession);
-        node.PeersChanged += (_, _) => Post(RefreshPeers);
-        node.PairingCodeChanged += (_, _) => Post(RefreshCode);
-        node.Trust.Changed += (_, _) => Post(() =>
+        node.PeersChanged += (_, _) => Post(() =>
         {
-            RefreshDevices();
-            RefreshSession();
+            RefreshPeers();
+            RefreshFriends();
+        });
+        node.JoinRequestsChanged += (_, _) => Post(RefreshRequests);
+        node.CurrentClipboardChanged += (_, _) => Post(RefreshCurrent);
+        node.TransfersChanged += (_, _) => Post(RefreshTransfersButton);
+        node.TransfersRequested += (_, _) => Post(() => TransfersWindow.ShowFor(node));
+        node.Friends.Changed += (_, _) => Post(() =>
+        {
+            RefreshFriends();
+            RefreshParticipants();
         });
         if (model.Notifier is { } notifier)
             notifier.Notified += (message, isError) => AddActivity((isError ? "! " : "") + message);
 
         LcdDevice.Text = $"▸ {node.Identity.DisplayName}";
         LcdPort.Text = $"PORTA {node.Port}";
+        IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA {node.Identity.Info.Fingerprint}";
 
-        WireSessionControls(node);
+        WireNetworkPage(node);
+        WireSessionPage(node);
         WireHistoryPage(node);
-        WireDevicesPage(node);
+        WireSettingsPage(node);
         WireSimulationPage(model.Simulation);
 
-        // La lista dei peer scoperti in rete scade: si aggiorna periodicamente.
+        // Gli host annunciati in rete scadono: l'elenco si ricontrolla periodicamente (e si ridisegna
+        // solo se cambia, così i pulsanti non spariscono sotto il mouse).
         DispatcherTimer.Run(() =>
         {
             RefreshPeers();
@@ -90,8 +101,24 @@ public partial class MainWindow : Window
 
         RefreshSession();
         RefreshPeers();
-        RefreshDevices();
-        RefreshCode();
+        RefreshFriends();
+        RefreshCurrent();
+    }
+
+    /// <summary>Riapre la finestra dall'area di notifica.</summary>
+    public void ShowFromTray()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    /// <summary>Chiude davvero CUS (menu dell'area di notifica).</summary>
+    public void ExitApplication()
+    {
+        _exitRequested = true;
+        Close();
     }
 
     protected override async void OnClosing(WindowClosingEventArgs e)
@@ -114,6 +141,14 @@ public partial class MainWindow : Window
                 System.Diagnostics.Trace.WriteLine($"CUS: arresto durante lo spegnimento di Windows fallito: {ex}");
             }
 
+            return;
+        }
+
+        // In background: la finestra si nasconde e CUS resta nell'area di notifica.
+        if (!_exitRequested && !_shutdownStarted && _model.Node?.KeepRunningInBackground == true && _model.HasTrayIcon)
+        {
+            e.Cancel = true;
+            Hide();
             return;
         }
 
@@ -160,23 +195,20 @@ public partial class MainWindow : Window
         CloseButton.Click += (_, _) => Close();
         MinimizeButton.Click += (_, _) => WindowState = WindowState.Minimized;
 
-        _pages.AddRange(
-        [
-            (PagePeersButton, PeersPage),
-            (PageHistoryButton, HistoryPage),
-            (PageDevicesButton, DevicesPage),
-            (PageSimButton, SimPage),
-            (PageActivityButton, ActivityList),
-            (PageInfoButton, InfoPage),
-        ]);
-        foreach (var (button, page) in _pages)
-            button.Click += (_, _) => ShowPage(page);
-        ShowPage(PeersPage);
+        _leftPages.AddRange([(PageHistoryButton, HistoryPage), (PageSettingsButton, SettingsPage), (PageSimButton, SimPage)]);
+        foreach (var (button, page) in _leftPages)
+            button.Click += (_, _) => ShowPage(_leftPages, page);
+        ShowPage(_leftPages, HistoryPage);
+
+        _rightPages.AddRange([(PageNetworkButton, NetworkPage), (PageFriendsButton, FriendsPage)]);
+        PageNetworkButton.Click += (_, _) => ShowNetworkOrSession();
+        PageFriendsButton.Click += (_, _) => ShowPage(_rightPages, FriendsPage);
+        ShowPage(_rightPages, NetworkPage);
     }
 
-    private void ShowPage(Control page)
+    private void ShowPage(List<(Button Button, Control Page)> pages, Control page)
     {
-        foreach (var (button, candidate) in _pages)
+        foreach (var (button, candidate) in pages)
         {
             candidate.IsVisible = candidate == page;
             button.Classes.Set("active", candidate == page);
@@ -186,38 +218,28 @@ public partial class MainWindow : Window
             _ = RefreshHistoryAsync();
     }
 
-    // ================================================================ sessione
-
-    private void WireSessionControls(CusNode node)
+    /// <summary>Prima scheda a destra: la ricerca in rete, o la sessione quando ci si offre o si è dentro.</summary>
+    private void ShowNetworkOrSession()
     {
-        LeaveButton.Click += async (_, _) => await Run(node.LeaveSessionAsync);
-        ModeButton.Click += (_, _) =>
-        {
-            _inviteDirection = _inviteDirection == ShareDirection.Bidirectional ? ShareDirection.ReadOnly : ShareDirection.Bidirectional;
-            var readOnly = _inviteDirection == ShareDirection.ReadOnly;
-            ModeButton.Content = readOnly ? "→" : "⇄";
-            ModeLabel.Text = readOnly ? "SOLA LETT." : "BIDIREZ.";
-            Avalonia.Automation.AutomationProperties.SetName(ModeButton, readOnly ? "Modalità: sola lettura" : "Modalità: bidirezionale");
-        };
-        InviteButton.Click += async (_, _) =>
-        {
-            if (PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
-            {
-                // Peer scoperto: l'identità che risponde deve essere quella annunciata (null per i
-                // peer aggiunti a mano, che non hanno un'identità nota).
-                var peer = _peers[i];
-                await Invite(node, peer.Host, peer.Port, peer.DeviceId);
-            }
-            else
-            {
-                ShowPage(PeersPage);
-                _model.Notifier?.Info("Scegli un dispositivo nell'elenco PEER, poi premi INVITA.");
-            }
-        };
-        InviteAddressButton.Click += async (_, _) =>
+        var inSession = _model.Node?.Session is not null;
+        NetworkPage.IsVisible = !inSession;
+        SessionPage.IsVisible = inSession;
+        FriendsPage.IsVisible = false;
+        PageNetworkButton.Classes.Set("active", true);
+        PageFriendsButton.Classes.Set("active", false);
+    }
+
+    private bool FriendsPageShown => FriendsPage.IsVisible;
+
+    // ================================================================ rete
+
+    private void WireNetworkPage(CusNode node)
+    {
+        OfferButton.Click += async (_, _) => await RunFrom(OfferButton, () => node.SetVisibleAsync(true));
+        JoinAddressButton.Click += async (_, _) =>
         {
             if (ParseAddress(AddressInput.Text) is { } endpoint)
-                await Invite(node, endpoint.Host, endpoint.Port, expectedDeviceId: null);
+                await RunFrom(JoinAddressButton, () => Join(node, endpoint.Host, endpoint.Port, expectedDeviceId: null));
         };
         AddPeerButton.Click += (_, _) =>
         {
@@ -227,57 +249,69 @@ public partial class MainWindow : Window
                 AddressInput.Text = "";
             }
         };
-        RemovePeerButton.Click += (_, _) =>
-        {
-            if (PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count && _peers[i].IsManual)
-                node.RemoveManualPeer(_peers[i].Address);
-        };
-        PeersList.SelectionChanged += (_, _) =>
-        {
-            // Solo una scelta dell'utente: l'aggiornamento periodico della lista non deve
-            // sovrascrivere l'indirizzo che l'utente sta scrivendo.
-            if (!_refreshingPeers && PeersList.SelectedIndex is var i && i >= 0 && i < _peers.Count)
-                PairAddressInput.Text = _peers[i].Address;
-        };
     }
 
-    private async Task Invite(CusNode node, string host, int port, string? expectedDeviceId)
+    private async Task Join(CusNode node, string host, int port, string? expectedDeviceId)
     {
-        // Un solo invito alla volta: un doppio clic non deve mandarne due allo stesso PC.
-        if (!InviteButton.IsEnabled)
+        var result = await node.JoinAsync(host, port, expectedDeviceId);
+        if (result.Outcome == JoinOutcome.Rejected)
+            _model.Notifier?.Info($"{result.PeerName} non ti ha fatto entrare" + (result.Reason is null ? "." : $": {result.Reason}."));
+    }
+
+    private void RefreshPeers()
+    {
+        if (_model.Node is not { } node)
             return;
-        InviteButton.IsEnabled = InviteAddressButton.IsEnabled = false;
-        try
+        var peers = node.Peers;
+        var signature = string.Join("\n", peers.Select(p => $"{p.DeviceId}|{p.DisplayName}|{p.Address}|{p.Participants}|{p.IsAnnounced}|{p.Agreement}|{p.IsManual}"));
+        if (signature == _peersSignature)
+            return;
+        _peersSignature = signature;
+
+        PeersPanel.Children.Clear();
+        if (peers.Count == 0)
         {
-            var direction = _inviteDirection;
-            AddActivity($"Richiesta{(direction == ShareDirection.ReadOnly ? " in sola lettura" : "")} inviata a {new PeerEndpoint(host, port)}: in attesa della risposta...");
-            await Run(async () =>
+            PeersPanel.Children.Add(Hint("Nessun host in rete. Chi vuole condividere deve premere OFFRITI COME HOST; oppure inserisci un indirizzo qui sotto."));
+            return;
+        }
+
+        foreach (var peer in peers)
+        {
+            var who = peer.IsManual ? peer.Address : $"{peer.DisplayName}{(peer.UserName.Length > 0 ? $" ({peer.UserName})" : "")}";
+            var detail = peer.IsAnnounced
+                ? (peer.Participants <= 1 ? "libero, si offre come host" : $"{peer.Participants} persone in sessione")
+                : peer.IsManual ? "indirizzo salvato" : "amico, non visibile ora";
+            var badges = (peer.Agreement switch { AgreementLevel.Anytime => "∞ ", AgreementLevel.AutoJoin => "⤵ ", _ => "" })
+                + (peer.DeviceId is { } id && node.Friends.TrustsWithSensitive(id) ? "••• " : "");
+
+            var buttons = new List<Control>();
+            if (peer.CanJoin)
             {
-                var result = await node.InviteAsync(host, port, expectedDeviceId, direction);
-                if (result.Outcome == InviteOutcome.Rejected)
-                    AddActivity($"{result.PeerName} ha rifiutato" + (result.Reason is null ? "." : $": {result.Reason}."));
-            });
-        }
-        finally
-        {
-            InviteButton.IsEnabled = InviteAddressButton.IsEnabled = true;
+                var join = RowButton("ENTRA", peer.Agreement == AgreementLevel.None ? "Chiedi di entrare: l'host decide" : "Entra senza conferma (patto)");
+                join.Click += async (_, _) => await RunFrom(join, () => Join(node, peer.Host, peer.Port, peer.DeviceId));
+                buttons.Add(join);
+            }
+
+            if (peer.IsManual)
+            {
+                var remove = RowButton("✕", "Togli dall'elenco");
+                remove.Click += (_, _) => node.RemoveManualPeer(peer.Address);
+                buttons.Add(remove);
+            }
+
+            PeersPanel.Children.Add(Row($"{badges}{who}", $"{detail} · {peer.Address}", highlight: false, buttons));
         }
     }
 
-    /// <summary>Esegue un'azione con il pulsante disattivato: niente secondo clic mentre è in corso.</summary>
-    private async Task RunFrom(Button button, Func<Task> action)
+    // ================================================================ sessione
+
+    private void WireSessionPage(CusNode node)
     {
-        if (!button.IsEnabled)
-            return;
-        button.IsEnabled = false;
-        try
-        {
-            await Run(action);
-        }
-        finally
-        {
-            button.IsEnabled = true;
-        }
+        VisibleToggle.Click += async (_, _) => await RunFrom(VisibleToggle, () => node.SetVisibleAsync(!node.IsVisible));
+        SensitiveToggle.Click += async (_, _) =>
+            await RunFrom(SensitiveToggle, () => node.SetSensitiveForAllAsync(node.Session?.SensitiveForAll != true));
+        TransfersButton.Click += (_, _) => TransfersWindow.ShowFor(node);
+        LeaveButton.Click += async (_, _) => await RunFrom(LeaveButton, node.LeaveSessionAsync);
     }
 
     private void RefreshSession()
@@ -286,53 +320,235 @@ public partial class MainWindow : Window
             return;
 
         var session = node.Session;
-        if (node.Trust.State.SelfRevoked)
-        {
-            LcdState.Text = "REVOCATO";
-            LcdParticipants.Text = "Serve una nuova identità (pagina DISPOSITIVI)";
-        }
-        else if (session is null)
+        if (session is null)
         {
             LcdState.Text = "IN ATTESA";
-            LcdParticipants.Text = "Nessuna sessione · scegli un peer e premi INVITA";
+            LcdParticipants.Text = "Offriti come host o entra (pannello RETE)";
         }
         else
         {
-            LcdState.Text = session.Role == SessionRole.Host ? "CONDIVISA · HOST" : "CONDIVISA";
-            LcdParticipants.Text = string.Join(" · ", session.Participants.Select(p =>
-                p.DisplayName + (p.IsHost ? " ★" : "") + (p.Direction == ShareDirection.ReadOnly ? " (sola lettura)" : "")));
+            LcdState.Text = session.Role == SessionRole.Host
+                ? (session.IsSharing ? "CONDIVISA · HOST" : "VISIBILE")
+                : session.MyDirection == ShareDirection.ReadOnly ? "SOLA LETTURA" : "CONDIVISA";
+            LcdParticipants.Text = session.IsSharing
+                ? string.Join("  ", session.Participants.Select(p => $"{AvaloniaOverlayIndicator.Glyph(p).Glyph} {p.DisplayName}{(p.IsSelf ? "◂" : "")}"))
+                : session.IsVisible ? "In attesa che qualcuno chieda di entrare..." : "Nessun altro nella sessione";
         }
 
-        LeaveButton.IsEnabled = session is not null;
-        LeaveLabel.Text = session?.Role == SessionRole.Host ? "CHIUDI" : "ESCI";
+        var host = session?.Role == SessionRole.Host;
+        PageNetworkButton.Content = session is null ? "RETE" : "SESSIONE";
+        VisibleToggle.IsVisible = host;
+        VisibleToggle.Classes.Set("active", session?.IsVisible == true);
+        VisibleToggle.Content = session?.IsVisible == true ? "◉ VISIBILE" : "○ NASCOSTO";
+        SensitiveToggle.IsVisible = host && session!.IsSharing;
+        SensitiveToggle.Classes.Set("active", session?.SensitiveForAll == true);
+        LeaveButton.Content = host ? "■ CHIUDI SESSIONE" : "■ ESCI";
+        RequestsTitle.IsVisible = host;
+
+        if (!FriendsPageShown)
+            ShowNetworkOrSession();
+        RefreshRequests();
+        RefreshParticipants();
+        RefreshTransfersButton();
     }
 
-    private void RefreshPeers()
+    private void RefreshRequests()
     {
         if (_model.Node is not { } node)
             return;
-        var selected = PeersList.SelectedIndex >= 0 && PeersList.SelectedIndex < _peers.Count ? _peers[PeersList.SelectedIndex] : null;
-        var peers = node.Peers;
-        var lines = peers.Select(p => p.IsManual
-            ? $"{p.Address} · a mano"
-            : $"{p.DisplayName}{(p.UserName.Length > 0 ? $" ({p.UserName})" : "")} — {p.Address}" + (p.IsTrusted ? " · tuo PC" : "")).ToList();
-
-        // Lista invariata (il caso normale ogni 3 secondi): non si tocca, così selezione, scorrimento
-        // e focus restano dove sono.
-        if (PeersList.ItemsSource is List<string> current && current.SequenceEqual(lines) && _peers.SequenceEqual(peers))
+        RequestsPanel.Children.Clear();
+        if (node.Session?.Role != SessionRole.Host)
             return;
 
-        _refreshingPeers = true;
-        try
+        var requests = node.JoinRequests;
+        if (requests.Count == 0)
         {
-            _peers.Clear();
-            _peers.AddRange(peers);
-            PeersList.ItemsSource = lines;
-            PeersList.SelectedIndex = selected is null ? -1 : _peers.FindIndex(p => p.Address == selected.Address && p.DeviceId == selected.DeviceId);
+            RequestsPanel.Children.Add(Hint(node.IsVisible ? "Nessuna richiesta in attesa." : "Sei nascosto: nessuno può chiedere di entrare."));
+            return;
         }
-        finally
+
+        foreach (var request in requests)
         {
-            _refreshingPeers = false;
+            var bidirectional = RowButton("⇄", "Fai entrare con accesso bidirezionale");
+            var readOnly = RowButton("↓", "Fai entrare in sola lettura");
+            var reject = RowButton("✕", "Rifiuta");
+            bidirectional.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Accept);
+            readOnly.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.AcceptReadOnly);
+            reject.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Reject);
+            RequestsPanel.Children.Add(Row(
+                $"? {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
+                $"impronta {request.Fingerprint}",
+                highlight: false,
+                [bidirectional, readOnly, reject]));
+        }
+    }
+
+    private void RefreshParticipants()
+    {
+        if (_model.Node is not { } node)
+            return;
+        ParticipantsPanel.Children.Clear();
+        if (node.Session is not { } session)
+            return;
+
+        var host = session.Role == SessionRole.Host;
+        foreach (var participant in session.Participants)
+        {
+            var (glyph, role) = AvaloniaOverlayIndicator.Glyph(participant);
+            var buttons = new List<Control>();
+            var friend = node.Friends.Get(participant.DeviceId);
+
+            if (participant.IsSelf && !host && session.MyGranted == ShareDirection.Bidirectional)
+            {
+                // Il membro con accesso bidirezionale passa a sola lettura (e torna) con un tasto.
+                var readOnly = session.MyDirection == ShareDirection.ReadOnly;
+                var toggle = RowButton(readOnly ? "↓" : "⇄", readOnly ? "Sei in sola lettura: torna bidirezionale" : "Passa in sola lettura: le tue copie restano qui");
+                toggle.Click += async (_, _) => await RunFrom(toggle, () => node.SetMyDirectionAsync(readOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
+                buttons.Add(toggle);
+            }
+
+            if (!participant.IsSelf)
+            {
+                if (host)
+                {
+                    // Un pulsante per membro che alterna bidirezionale e sola lettura.
+                    var granted = participant.Granted;
+                    var grant = RowButton(granted == ShareDirection.ReadOnly ? "↓" : "⇄",
+                        granted == ShareDirection.ReadOnly ? "In sola lettura: clic per dargli accesso bidirezionale" : "Bidirezionale: clic per metterlo in sola lettura");
+                    grant.Click += async (_, _) => await RunFrom(grant, () => node.SetMemberGrantAsync(participant.DeviceId,
+                        granted == ShareDirection.ReadOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
+                    buttons.Add(grant);
+                }
+
+                var trusted = friend?.TrustedWithSensitive == true;
+                var trust = RowButton("•••", trusted ? "Affidabile: vede le password che copi. Clic per togliere" : "Clic per mostrargli anche le password che copi (affidabile)");
+                trust.Classes.Add("toggle");
+                trust.Classes.Set("lit", trusted);
+                trust.Click += (_, _) => node.SetSensitiveTrust(participant.DeviceId, participant.DisplayName, !trusted);
+                buttons.Add(trust);
+
+                if (host)
+                {
+                    var agreement = friend?.Agreement ?? AgreementLevel.None;
+                    var pact = RowButton(agreement switch { AgreementLevel.Anytime => "∞", AgreementLevel.AutoJoin => "⤵", _ => "PATTO" },
+                        "Proponi un patto reciproco (deve accettarlo)");
+                    pact.Classes.Add("toggle");
+                    pact.Classes.Set("lit", agreement != AgreementLevel.None);
+                    pact.Flyout = PactMenu(node, participant.DeviceId, agreement);
+                    buttons.Add(pact);
+                }
+            }
+
+            var detail = participant.IsSelf ? $"{role} · sei tu" : role;
+            if (participant.IsHost && !participant.IsSelf && friend?.TrustedWithSensitive != true)
+                detail += " · le tue password non gli arrivano";
+            ParticipantsPanel.Children.Add(Row($"{glyph} {participant.DisplayName}", detail, participant.IsSelf, buttons));
+        }
+    }
+
+    private MenuFlyout PactMenu(CusNode node, string deviceId, AgreementLevel current)
+    {
+        var flyout = new MenuFlyout();
+        void Add(string header, AgreementLevel level)
+        {
+            var item = new MenuItem { Header = header, IsEnabled = level != current };
+            item.Click += async (_, _) => await Run(async () =>
+            {
+                if (!await node.ProposeAgreementAsync(deviceId, level))
+                    _model.Notifier?.Info("Patto rifiutato.");
+            });
+            flyout.Items.Add(item);
+        }
+
+        Add("⤵ Entra senza conferma quando ti offri", AgreementLevel.AutoJoin);
+        Add("∞ Collegamento in qualsiasi momento", AgreementLevel.Anytime);
+        if (current != AgreementLevel.None)
+        {
+            var revoke = new MenuItem { Header = "✕ Sciogli il patto" };
+            revoke.Click += async (_, _) => await Run(() => node.RevokeAgreementAsync(deviceId));
+            flyout.Items.Add(revoke);
+        }
+
+        return flyout;
+    }
+
+    private void RefreshTransfersButton()
+    {
+        if (_model.Node is not { } node)
+            return;
+        var transfers = node.Transfers;
+        var active = transfers.Count(t => t.State == TransferState.Active);
+        TransfersButton.IsVisible = transfers.Count > 0;
+        TransfersButton.Content = active > 0 ? $"⇅ TRASFERIMENTI ({active})" : "⇅ TRASFERIMENTI";
+    }
+
+    private void RefreshCurrent()
+    {
+        var current = _model.Node?.CurrentClipboard;
+        if (current is null)
+        {
+            LcdCurrent.Text = "";
+            LcdCurrentSize.Text = "";
+            return;
+        }
+
+        var self = current.OriginDeviceId == _model.Node?.Identity.DeviceId;
+        var title = current.Kind == ClipboardContentKind.Files && !current.IsSensitive
+            ? DisplayText.MiddleEllipsis(DisplayText.Sanitize(current.Title, 260, ""), 26)
+            : current.Title;
+        LcdCurrent.Text = $"{(self ? "tu" : DisplayText.Sanitize(current.OriginName, 32))}: {(current.IsSensitive ? "••• " : "")}{title}{(current.IsShared ? "" : " · solo qui")}";
+        LcdCurrentSize.Text = current.SizeBytes is { } size ? DisplayText.FormatSize(size) : "";
+    }
+
+    // ================================================================ amici
+
+    private void RefreshFriends()
+    {
+        if (_model.Node is not { } node)
+            return;
+        FriendsPanel.Children.Clear();
+        var friends = node.Friends.All;
+        if (friends.Count == 0)
+        {
+            FriendsPanel.Children.Add(Hint("Nessun amico. In una sessione l'host può proporre un patto ai connessi; chiunque può marcare un partecipante come affidabile (•••)."));
+            return;
+        }
+
+        foreach (var friend in friends)
+        {
+            var buttons = new List<Control>();
+            var trust = RowButton("•••", friend.TrustedWithSensitive ? "Vede le tue password: clic per togliere" : "Clic per mostrargli le tue password");
+            trust.Classes.Add("toggle");
+                trust.Classes.Set("lit", friend.TrustedWithSensitive);
+            trust.Click += (_, _) => node.SetSensitiveTrust(friend.DeviceId, friend.DisplayName, !friend.TrustedWithSensitive);
+            buttons.Add(trust);
+
+            if (friend.Agreement != AgreementLevel.None)
+            {
+                var revoke = RowButton("SCIOGLI", "Scioglie il patto per entrambi");
+                revoke.Click += async (_, _) => await RunFrom(revoke, async () =>
+                {
+                    if (await ConfirmDialog.ShowAsync(this, "Sciogli il patto",
+                            $"Sciogliere il patto con {friend.DisplayName}? Cade anche dal suo lato: per rifarlo servirà una nuova proposta in sessione.",
+                            "SCIOGLI"))
+                        await node.RevokeAgreementAsync(friend.DeviceId);
+                });
+                buttons.Add(revoke);
+            }
+
+            var remove = RowButton("✕", "Togli dagli amici (patto e fiducia)");
+            remove.Click += async (_, _) => await RunFrom(remove, () => node.RemoveFriendAsync(friend.DeviceId));
+            buttons.Add(remove);
+
+            var agreement = friend.Agreement switch
+            {
+                AgreementLevel.Anytime => "∞ si collega quando vuole",
+                AgreementLevel.AutoJoin => "⤵ entra senza conferma",
+                _ => "nessun patto",
+            };
+            var where = friend.LastEndpoint is { } endpoint ? $" · {endpoint}" : "";
+            FriendsPanel.Children.Add(Row(friend.DisplayName, $"{agreement}{(friend.TrustedWithSensitive ? " · ••• vede le password" : "")}{where}", false, buttons,
+                tip: $"Impronta {friend.Fingerprint}"));
         }
     }
 
@@ -357,12 +573,18 @@ public partial class MainWindow : Window
                 AddActivity($"Copiato dalla cronologia: {Describe(entry)}");
             });
         };
+        node.CurrentClipboardChanged += (_, _) => Post(() =>
+        {
+            if (HistoryPage.IsVisible)
+                _ = RefreshHistoryAsync();
+        });
     }
 
     private async Task RefreshHistoryAsync()
     {
         if (_model.Node is not { } node)
             return;
+        HistoryTitle.Text = node.Session?.Role == SessionRole.Member ? "COPIE DI QUESTA SESSIONE (DALL'HOST)" : "ULTIME 20 COPIE OSPITATE QUI";
         await Run(async () =>
         {
             var entries = await node.GetHistoryAsync();
@@ -370,150 +592,28 @@ public partial class MainWindow : Window
             _history.AddRange(entries);
             // Le voci (nomi e testi) possono arrivare da altri PC: niente a capo né caratteri bidi.
             HistoryList.ItemsSource = _history.Select(h =>
-                $"#{h.Sequence,-3} {h.CreatedUtc.ToLocalTime():HH:mm:ss} {DisplayText.Sanitize(h.OriginName, 64)}: {Describe(h)}").ToList();
+                $"{h.CreatedUtc.ToLocalTime():HH:mm} {DisplayText.Sanitize(h.OriginName, 24)}: {Describe(h)}").ToList();
         });
     }
 
-    // ================================================================ dispositivi
+    // ================================================================ impostazioni
 
-    private void WireDevicesPage(CusNode node)
+    private void WireSettingsPage(CusNode node)
     {
-        IdentityText.Text = $"QUESTO PC: {node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA: {node.Identity.Info.Fingerprint}";
-
-        ShowCodeButton.Click += (_, _) =>
-        {
-            if (node.ActivePairingCode is not null)
-            {
-                node.CancelPairing();
-                return;
-            }
-
-            _ = Run(() =>
-            {
-                node.StartPairing();
-                return Task.CompletedTask;
-            });
-        };
-        PairButton.Click += async (_, _) =>
-        {
-            if (ParseAddress(PairAddressInput.Text) is not { } endpoint)
-                return;
-            var code = PairCodeInput.Text ?? "";
-            await RunFrom(PairButton, async () =>
-            {
-                try
-                {
-                    var device = await node.PairWithAsync(endpoint.Host, endpoint.Port, code);
-                    PairCodeInput.Text = "";
-                    _model.Notifier?.Info($"Abbinato a {device.DisplayName}.");
-                }
-                catch (PairingFailedException ex)
-                {
-                    _model.Notifier?.Error(ex.Message);
-                }
-            });
-        };
-        RevokeButton.Click += async (_, _) =>
-        {
-            if (DevicesList.SelectedIndex is not (var i and >= 0) || i >= _devices.Count)
-                return;
-            var device = _devices[i];
-            await RunFrom(RevokeButton, async () =>
-            {
-                if (await ConfirmDialog.ShowAsync(this, "Revoca dispositivo",
-                        $"Revocare {device.DisplayName}? Non potrà più condividere la clipboard con i tuoi PC "
-                        + "e la revoca non si può annullare: per riaverlo servirà un nuovo abbinamento con una nuova identità.",
-                        "REVOCA"))
-                    await node.RevokeAsync(device.DeviceId);
-            });
-        };
-        RevokeSelfButton.Click += async (_, _) => await RunFrom(RevokeSelfButton, async () =>
-        {
-            if (await ConfirmDialog.ShowAsync(this, "Revoca questo PC",
-                    "Revocare questo PC? Gli altri tuoi PC smetteranno di fidarsi di lui e la revoca non si può annullare: "
-                    + "per tornare a usare CUS qui servirà una nuova identità.",
-                    "REVOCA QUESTO PC"))
-                await node.RevokeAsync(node.Identity.DeviceId);
-        });
-        ResetIdentityButton.Click += async (_, _) =>
-        {
-            if (_model.ResetIdentityAndRestart is not { } reset)
-                return;
-            await Run(async () =>
-            {
-                if (!await ConfirmDialog.ShowAsync(this, "Nuova identità",
-                        "Generare una nuova identità e riavviare CUS? L'identità attuale viene cancellata e non si può recuperare: "
-                        + "questo PC andrà abbinato di nuovo agli altri.",
-                        "NUOVA IDENTITÀ"))
-                    return;
-                ResetIdentityButton.IsEnabled = false;
-                try
-                {
-                    await reset();
-                }
-                finally
-                {
-                    ResetIdentityButton.IsEnabled = true;
-                }
-            });
-        };
-        DevicesList.SelectionChanged += (_, _) =>
-        {
-            if (DevicesList.SelectedIndex is var i && i >= 0 && i < _devices.Count)
-            {
-                var pairedBy = node.Trust.PairedBy(_devices[i].DeviceId);
-                PairedByText.Text = pairedBy.Count == 0
-                    ? ""
-                    : $"{_devices[i].DisplayName} ha abbinato: {string.Join(", ", pairedBy.Select(d => d.DisplayName))}. Se lo revochi, valuta se revocare anche questi.";
-            }
-        };
-    }
-
-    private void RefreshDevices()
-    {
-        if (_model.Node is not { } node)
-            return;
-        var state = node.Trust.State;
-        RevokedPanel.IsVisible = state.SelfRevoked;
-        _devices.Clear();
-        _devices.AddRange(state.Trusted.Values.OrderBy(d => d.DisplayName, StringComparer.CurrentCultureIgnoreCase));
-        var revoked = node.Trust.Entries
-            .Where(e => e.Kind == TrustEntryKind.Pair && state.IsRevoked(e.SubjectId) && e.SubjectId != node.Identity.DeviceId)
-            .GroupBy(e => e.SubjectId)
-            .Select(g => $"{DisplayText.Sanitize(g.Last().SubjectName, 64)} — REVOCATO");
-        DevicesList.ItemsSource = _devices.Select(d => $"{d.DisplayName} — {Core.Identity.DeviceIdentity.FormatFingerprint(d.SignPublicKey)}")
-            .Concat(revoked)
-            .ToList();
-        PairedByText.Text = "";
-    }
-
-    private void RefreshCode()
-    {
-        var code = _model.Node?.ActivePairingCode;
-        _codeTimer?.Dispose();
-        if (code is null)
-        {
-            CodeText.Text = "";
-            LcdCode.Text = "";
-            return;
-        }
-
         void Update()
         {
-            var left = code.ExpiresAt - DateTimeOffset.UtcNow;
-            var text = left > TimeSpan.Zero
-                ? $"CODICE {code.Code[..3]} {code.Code[3..]}  ·  {left:m\\:ss}  ·  TENTATIVI {code.AttemptsLeft}"
-                : "";
-            CodeText.Text = text;
-            LcdCode.Text = text;
+            var on = node.KeepRunningInBackground;
+            BackgroundToggle.Content = on ? "SÌ" : "NO";
+            BackgroundToggle.Classes.Set("active", on);
         }
 
-        Update();
-        _codeTimer = DispatcherTimer.Run(() =>
+        BackgroundToggle.Click += (_, _) =>
         {
+            node.KeepRunningInBackground = !node.KeepRunningInBackground;
             Update();
-            return _model.Node?.ActivePairingCode is not null;
-        }, TimeSpan.FromSeconds(1));
+        };
+        BackgroundToggle.IsEnabled = _model.HasTrayIcon;
+        Update();
     }
 
     // ================================================================ simulazione
@@ -530,6 +630,11 @@ public partial class MainWindow : Window
         {
             if (!string.IsNullOrEmpty(SimTextInput.Text))
                 simulation.CopyText(SimTextInput.Text);
+        };
+        SimCopySensitiveButton.Click += (_, _) =>
+        {
+            if (!string.IsNullOrEmpty(SimTextInput.Text))
+                simulation.CopySensitiveText(SimTextInput.Text);
         };
         SimCopyFilesButton.Click += async (_, _) =>
         {
@@ -565,6 +670,72 @@ public partial class MainWindow : Window
         };
     }
 
+    // ================================================================ righe degli elenchi
+
+    /// <summary>Riga di un elenco: titolo e dettaglio a sinistra, pulsanti a destra; questo PC evidenziato.</summary>
+    private static Control Row(string title, string detail, bool highlight, IReadOnlyList<Control> buttons, string? tip = null)
+    {
+        var titleText = new TextBlock
+        {
+            Text = title,
+            FontFamily = Skin.LcdFont,
+            FontSize = 12,
+            FontWeight = FontWeight.Bold,
+            Foreground = highlight ? Skin.InkBrush : Skin.LimeTextBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var detailText = new TextBlock
+        {
+            Text = detail,
+            FontFamily = Skin.LcdFont,
+            FontSize = 10.5,
+            Foreground = highlight ? Skin.InkBrush : new SolidColorBrush(Color.Parse("#7FB83A")),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var button in buttons)
+            actions.Children.Add(button);
+        DockPanel.SetDock(actions, Dock.Right);
+
+        var row = new Border
+        {
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 4),
+            Background = highlight ? Skin.PillBrush : new SolidColorBrush(Color.Parse("#1C2E10")),
+            BorderBrush = highlight ? Skin.LimeTextBrush : new SolidColorBrush(Color.Parse("#2F4A14")),
+            BorderThickness = new Thickness(1),
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    actions,
+                    new StackPanel { Spacing = 1, Margin = new Thickness(0, 0, 6, 0), Children = { titleText, detailText } },
+                },
+            },
+        };
+        if (tip is not null)
+            ToolTip.SetTip(row, tip);
+        return row;
+    }
+
+    private static Button RowButton(string text, string tip)
+    {
+        var button = Skin.Pill(text);
+        button.MinWidth = 30;
+        ToolTip.SetTip(button, tip);
+        return button;
+    }
+
+    private static TextBlock Hint(string text) => new()
+    {
+        Text = text,
+        FontFamily = Skin.LcdFont,
+        FontSize = 11,
+        Foreground = new SolidColorBrush(Color.Parse("#7FB83A")),
+        TextWrapping = TextWrapping.Wrap,
+    };
+
     // ================================================================ utilità
 
     private PeerEndpoint? ParseAddress(string? text)
@@ -575,8 +746,25 @@ public partial class MainWindow : Window
         }
         catch (ArgumentException ex)
         {
-            _model.Notifier?.Error(ex.Message);
+            // Senza il " (Parameter 'value')" che .NET aggiunge al messaggio.
+            _model.Notifier?.Error(ex.ParamName is { } name ? ex.Message.Replace($" (Parameter '{name}')", "") : ex.Message);
             return null;
+        }
+    }
+
+    /// <summary>Esegue un'azione con il pulsante disattivato: niente secondo clic mentre è in corso.</summary>
+    private async Task RunFrom(Button button, Func<Task> action)
+    {
+        if (!button.IsEnabled)
+            return;
+        button.IsEnabled = false;
+        try
+        {
+            await Run(action);
+        }
+        finally
+        {
+            button.IsEnabled = true;
         }
     }
 

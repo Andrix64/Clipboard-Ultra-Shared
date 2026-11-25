@@ -17,6 +17,9 @@ public sealed class PeerConnection : IAsyncDisposable
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>Saluto iniziale: nomi e porta, ben sotto questo limite anche con nomi lunghi.</summary>
+    internal const int HelloMaxBytes = 4 * 1024;
+
     /// <summary>
     /// Tempo massimo per consegnare un messaggio al socket. Un peer che non legge più (o legge
     /// apposta troppo piano) fa scadere l'invio: la connessione si chiude invece di bloccare chi invia.
@@ -270,7 +273,8 @@ public sealed class PeerConnection : IAsyncDisposable
         try
         {
             await channel.SendAsync(new HelloMessage(identity.DisplayName, identity.UserName, listenPort).Serialize(), ct);
-            var hello = CusMessage.Deserialize(await channel.ReceiveAsync(ct)) as HelloMessage
+            // Chiunque in rete arriva fin qui: il saluto (due nomi e una porta) non può pesare 8 MB.
+            var hello = CusMessage.Deserialize(await channel.ReceiveAsync(ct, HelloMaxBytes)) as HelloMessage
                 ?? throw new ProtocolException("Atteso il saluto iniziale.");
             var remote = new DeviceInfo(
                 channel.RemoteDeviceId,

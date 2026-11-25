@@ -1,8 +1,8 @@
 using Cus.Core.Abstractions;
+using Cus.Core.Friends;
 using Cus.Core.Hosting;
 using Cus.Core.Identity;
 using Cus.Core.Storage;
-using Cus.Core.Trust;
 using Cus.Platform.Simulated;
 
 namespace Cus.Core.Tests;
@@ -95,19 +95,72 @@ public sealed class CusDatabaseTests : IDisposable
     }
 
     [Fact]
-    public void TrustEntries_AreStoredOnceAndRoundTrip()
+    public void Friends_RoundTrip_AndDelete()
     {
         using var db = CusDatabase.Open(Paths("alice"), _secrets);
-        var actor = DeviceIdentity.Generate("a", "u");
-        var subject = DeviceIdentity.Generate("b", "u");
-        var entry = TrustEntry.Create(actor, TrustEntryKind.Pair, subject.Info, DateTimeOffset.UtcNow);
+        var id = DeviceIdentity.Generate("luca", "u").DeviceId;
+        var friend = new Friend(id, "Luca", AgreementLevel.Anytime, TrustedWithSensitive: true, "192.168.1.5", 23701, DateTimeOffset.UtcNow);
 
-        Assert.True(db.AddTrustEntry(entry));
-        Assert.False(db.AddTrustEntry(entry));
+        db.UpsertFriend(friend);
+        db.UpsertFriend(friend with { DisplayName = "Luca (fisso)" });
 
-        var loaded = db.GetTrustEntries().Single();
-        Assert.Equal(entry.EntryId, loaded.EntryId);
-        Assert.True(loaded.HasValidSignature());
+        var loaded = db.GetFriend(id)!;
+        Assert.Equal("Luca (fisso)", loaded.DisplayName);
+        Assert.Equal(AgreementLevel.Anytime, loaded.Agreement);
+        Assert.True(loaded.TrustedWithSensitive);
+        Assert.Equal(new PeerEndpoint("192.168.1.5", 23701), loaded.LastEndpoint);
+        Assert.Equal(DeviceIdentity.FingerprintOf(id), loaded.Fingerprint);
+        Assert.Single(db.GetFriends());
+
+        db.DeleteFriend(id);
+        Assert.Null(db.GetFriend(id));
+        Assert.Empty(db.GetFriends());
+    }
+
+    [Fact]
+    public void Migration4_DropsTheTrustListAndPairedEndpoints_AndKeepsTheRest()
+    {
+        var paths = Paths("vecchio");
+        var key = new byte[32];
+        Random.Shared.NextBytes(key);
+        _secrets.Save(CusDatabase.DatabaseKeyName, key);
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.DatabasePath)!);
+
+        // DB alla versione 3 (prima degli amici), con una voce di fiducia e un indirizzo memorizzato.
+        using (var connection = EncryptedDatabase.Open(paths.DatabasePath, key))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TABLE device_identity (id INTEGER PRIMARY KEY CHECK (id = 1), display_name TEXT NOT NULL, user_name TEXT NOT NULL,
+                    sign_public BLOB NOT NULL, sign_secret BLOB NOT NULL, created_utc TEXT NOT NULL);
+                CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE manual_peers (address TEXT PRIMARY KEY);
+                CREATE TABLE trust_entries (entry_id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor_public BLOB NOT NULL, subject_public BLOB NOT NULL,
+                    subject_name TEXT NOT NULL, created_utc TEXT NOT NULL, signature BLOB NOT NULL);
+                CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL, session_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                    origin_device_id TEXT NOT NULL, origin_name TEXT NOT NULL, kind TEXT NOT NULL, text TEXT, image_png BLOB, files_json TEXT,
+                    created_utc TEXT NOT NULL);
+                INSERT INTO trust_entries VALUES ('x', 'pair', x'01', x'02', 'vecchio PC', '2026-11-24T10:00:00.000Z', x'03');
+                INSERT INTO settings VALUES ('endpoint/ABC', '192.168.1.9:23700'), ('display-name', 'tenuto');
+                INSERT INTO manual_peers VALUES ('192.168.1.20:23700');
+                PRAGMA user_version = 3;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using (var db = CusDatabase.Open(paths, _secrets))
+        {
+            Assert.Equal(4, db.CurrentSchemaVersion());
+            Assert.Null(db.GetSetting("endpoint/ABC"));
+            Assert.Equal("tenuto", db.GetSetting("display-name"));
+            Assert.Equal(["192.168.1.20:23700"], db.GetManualPeers());
+            Assert.Empty(db.GetFriends());
+        }
+
+        using var check = EncryptedDatabase.Open(paths.DatabasePath, key);
+        using var query = check.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name = 'trust_entries';";
+        Assert.Equal(0L, query.ExecuteScalar());
     }
 
     public void Dispose() => _temp.Dispose();

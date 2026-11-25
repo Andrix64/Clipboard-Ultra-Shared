@@ -5,12 +5,15 @@ using Cus.Core.Abstractions;
 
 namespace Cus.Core.Net;
 
-/// <summary>Annuncio ricevuto da un altro dispositivo in rete.</summary>
-public sealed record DiscoveryAnnouncement(string DeviceId, string DisplayName, string UserName, string Host, int Port);
+/// <summary>Annuncio ricevuto da un host che si offre in rete.</summary>
+/// <param name="Participants">Persone nella sua sessione, lui compreso.</param>
+/// <param name="Hidden">Congedo: l'host ha smesso di offrirsi e va tolto subito dall'elenco.</param>
+public sealed record DiscoveryAnnouncement(string DeviceId, string DisplayName, string UserName, string Host, int Port, int Participants = 1, bool Hidden = false);
 
 /// <summary>
 /// Scoperta dei peer con annunci UDP multicast (239.255.23.70, porta 23701). Più istanze sullo
-/// stesso PC condividono la porta grazie a SO_REUSEADDR e ricevono tutte gli annunci.
+/// stesso PC condividono la porta grazie a SO_REUSEADDR e ricevono tutte gli annunci. Si annuncia
+/// solo chi si offre come host (come AirDrop: si è visibili solo quando lo si sceglie); tutti ascoltano.
 /// Gli annunci non sono autenticati: servono solo a trovare l'indirizzo, l'identità la verifica
 /// il canale cifrato alla connessione.
 /// </summary>
@@ -21,15 +24,15 @@ public sealed class Discovery : IAsyncDisposable
     public static readonly TimeSpan AnnounceInterval = TimeSpan.FromSeconds(5);
 
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
-    private readonly Func<AnnouncementPayload> _payload;
+    private readonly Func<AnnouncementPayload?> _payload;
     private readonly int _port;
     private readonly CancellationTokenSource _lifetime = new();
     private UdpClient? _client;
     private Task? _receiveLoop;
     private Task? _announceLoop;
 
-    /// <param name="payload">Dati da annunciare, letti a ogni annuncio (nome e porta possono cambiare).</param>
-    public Discovery(Func<AnnouncementPayload> payload, int port = DefaultPort)
+    /// <param name="payload">Dati da annunciare, letti a ogni annuncio; null: niente annuncio (non visibile).</param>
+    public Discovery(Func<AnnouncementPayload?> payload, int port = DefaultPort)
     {
         _payload = payload;
         _port = port;
@@ -62,6 +65,15 @@ public sealed class Discovery : IAsyncDisposable
 
     /// <summary>Annuncia subito, oltre agli annunci periodici.</summary>
     public Task AnnounceNowAsync() => SendAsync(_lifetime.Token);
+
+    /// <summary>Congedo: chi ascolta toglie subito questo host dall'elenco invece di aspettare che scada.</summary>
+    public async Task AnnounceHiddenAsync(AnnouncementPayload payload)
+    {
+        if (_client is null)
+            return;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload with { Instance = _instanceId, Hidden = true, DisplayName = "", UserName = "", Participants = 0 });
+        await _client.SendAsync(bytes, new IPEndPoint(Group, _port), _lifetime.Token);
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -101,9 +113,9 @@ public sealed class Discovery : IAsyncDisposable
 
     private async Task SendAsync(CancellationToken cancellationToken)
     {
-        if (_client is null)
+        if (_client is null || _payload() is not { } current)
             return;
-        var payload = _payload() with { Instance = _instanceId };
+        var payload = current with { Instance = _instanceId };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
         await _client.SendAsync(bytes, new IPEndPoint(Group, _port), cancellationToken);
     }
@@ -129,7 +141,8 @@ public sealed class Discovery : IAsyncDisposable
                 // Un'istanza sullo stesso PC si raggiunge sempre in loopback (anche se ascolta solo lì).
                 var host = IsLocalAddress(result.RemoteEndPoint.Address) ? "127.0.0.1" : result.RemoteEndPoint.Address.ToString();
                 Announced?.Invoke(new DiscoveryAnnouncement(
-                    payload.DeviceId.ToUpperInvariant(), DisplayText.Sanitize(payload.DisplayName, 64), DisplayText.Sanitize(payload.UserName, 64, ""), host, payload.Port));
+                    payload.DeviceId.ToUpperInvariant(), DisplayText.Sanitize(payload.DisplayName, 64), DisplayText.Sanitize(payload.UserName, 64, ""), host, payload.Port,
+                    Math.Clamp(payload.Participants, 1, 999), payload.Hidden));
             }
             catch (OperationCanceledException)
             {
@@ -175,7 +188,7 @@ internal static class LocalAddresses
     }
 }
 
-public sealed record AnnouncementPayload(string DeviceId, string DisplayName, string UserName, int Port)
+public sealed record AnnouncementPayload(string DeviceId, string DisplayName, string UserName, int Port, int Participants = 1, bool Hidden = false)
 {
     public string App { get; init; } = "CUS";
 

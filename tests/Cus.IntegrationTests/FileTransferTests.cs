@@ -20,7 +20,8 @@ public sealed class FileTransferTests : IAsyncLifetime
     public async Task Files_AreAnnouncedThenDownloadedOnlyOnPaste()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        await andrea.InviteAsync(luca);
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
         var files = CreateFiles("orig", ("relazione.pdf", 3_500_000), ("cartella/note.txt", 10));
 
         andrea.Clipboard.Copy(ClipboardContent.FromFiles(files));
@@ -42,8 +43,9 @@ public sealed class FileTransferTests : IAsyncLifetime
     public async Task Files_FromMember_ReachOtherMember_ThroughHost()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
-        await host.InviteAsync(b);
-        await host.InviteAsync(c);
+        await host.ShowAsync();
+        await b.JoinAsync(host);
+        await c.JoinAsync(host);
         var files = CreateFiles("b-files", ("foto.jpg", 1_200_000));
 
         b.Clipboard.Copy(ClipboardContent.FromFiles(files));
@@ -61,7 +63,8 @@ public sealed class FileTransferTests : IAsyncLifetime
     public async Task Paste_AfterOriginCopiedSomethingElse_GivesClearError()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        await andrea.InviteAsync(luca);
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
 
         var files = CreateFiles("luca-files", ("a.bin", 100));
         luca.Clipboard.Copy(ClipboardContent.FromFiles(files));
@@ -83,7 +86,8 @@ public sealed class FileTransferTests : IAsyncLifetime
     public async Task Paste_AfterOriginDisconnected_GivesClearError()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        await andrea.InviteAsync(luca);
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
         andrea.Clipboard.Copy(ClipboardContent.FromFiles(CreateFiles("a", ("x.bin", 10))));
         await Eventually.TrueAsync(() => luca.Clipboard.Current?.Kind == ClipboardContentKind.Files, "luca riceve i file");
 

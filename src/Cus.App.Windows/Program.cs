@@ -128,33 +128,6 @@ internal static class Program
                 });
         }
 
-        var resetting = 0;
-        async Task ResetIdentityAndRestart()
-        {
-            if (Interlocked.Exchange(ref resetting, 1) != 0)
-                return;
-
-            // Il contesto della UI si mantiene dopo l'await: il mutex va rilasciato dal thread che lo possiede.
-            await Shutdown();
-            using (var db = CusDatabase.Open(paths, new DpapiSecretStore(paths.DataDirectory)))
-                CusNode.ResetIdentity(db);
-            mutex.ReleaseMutex();
-
-            try
-            {
-                using var restarted = Process.Start(new ProcessStartInfo(Environment.ProcessPath!, args) { UseShellExecute = false })
-                    ?? throw new InvalidOperationException("processo non avviato");
-            }
-            catch (Exception ex)
-            {
-                // Il nodo è già fermo: l'utente deve sapere che CUS va riaperto a mano.
-                throw new CusOperationException(
-                    $"Nuova identità creata, ma il riavvio automatico di CUS non è riuscito ({ex.Message}). Chiudi questa finestra e riapri CUS.", ex);
-            }
-
-            (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
-        }
-
         try
         {
             node.StartAsync().GetAwaiter().GetResult();
@@ -176,7 +149,6 @@ internal static class Program
             Notifier = notifier,
             Simulation = simulation,
             Shutdown = Shutdown,
-            ResetIdentityAndRestart = ResetIdentityAndRestart,
         };
     }
 

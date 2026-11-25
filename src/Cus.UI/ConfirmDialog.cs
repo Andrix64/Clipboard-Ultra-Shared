@@ -7,7 +7,7 @@ using Avalonia.Platform;
 namespace Cus.UI;
 
 /// <summary>
-/// Finestra modale di conferma per le azioni irreversibili (revoche, nuova identità). Invio ed Esc
+/// Finestra modale di conferma per le azioni irreversibili (per esempio sciogliere un patto). Invio ed Esc
 /// annullano: confermare richiede un clic sul pulsante dell'azione.
 /// </summary>
 public static class ConfirmDialog
@@ -59,7 +59,7 @@ public static class ConfirmDialog
             Background = Brushes.Transparent,
             Children =
             {
-                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Foreground = Skin.LimeTextBrush },
+                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Padding = new Thickness(0, 0, 5, 0), Foreground = Skin.LimeTextBrush },
             },
         };
         header.PointerPressed += (_, e) => window.BeginMoveDrag(e);

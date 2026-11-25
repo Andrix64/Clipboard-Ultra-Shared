@@ -129,6 +129,20 @@
     <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
   </Style>
 
+  <!-- Interruttori negli elenchi (affidabile, patto): spenti finché non sono attivi -->
+  <Style Selector="Button.pill.toggle /template/ Border#Body">
+    <Setter Property="Background" Value="{x:Static ui:Skin.PillOffBrush}" />
+  </Style>
+  <Style Selector="Button.pill.toggle">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.EngravingBrush}" />
+  </Style>
+  <Style Selector="Button.pill.toggle.lit /template/ Border#Body">
+    <Setter Property="Background" Value="{x:Static ui:Skin.PillBrush}" />
+  </Style>
+  <Style Selector="Button.pill.toggle.lit">
+    <Setter Property="Foreground" Value="{x:Static ui:Skin.InkBrush}" />
+  </Style>
+
   <!-- Liste e campi in stile LCD spento -->
   <Style Selector="ListBox.lcd">
     <Setter Property="Background" Value="{x:Static ui:Skin.DarkLcdBrush}" />

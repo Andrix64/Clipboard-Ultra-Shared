@@ -3,13 +3,13 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Cus.Core.Abstractions;
 using Cus.Core.Identity;
-using Cus.Core.Trust;
+using Cus.Core.Friends;
 using Microsoft.Data.Sqlite;
 
 namespace Cus.Core.Storage;
 
 /// <summary>
-/// DB cifrato dell'istanza: identità, impostazioni, peer manuali, lista di fiducia, cronologia.
+/// DB cifrato dell'istanza: identità, impostazioni, peer manuali, amici, cronologia.
 /// Thread-safe: un'unica connessione protetta da un lock.
 /// </summary>
 public sealed class CusDatabase : IDisposable
@@ -54,6 +54,21 @@ public sealed class CusDatabase : IDisposable
             image_png BLOB,
             files_json TEXT,
             created_utc TEXT NOT NULL);
+        """,
+        // 4: l'abbinamento con codice e la lista di revoche firmata lasciano il posto agli amici
+        // (patti reciproci e fiducia per i contenuti sensibili). Gli indirizzi dei PC abbinati
+        // stavano nelle impostazioni.
+        """
+        DROP TABLE trust_entries;
+        DELETE FROM settings WHERE key LIKE 'endpoint/%';
+        CREATE TABLE friends (
+            device_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            agreement INTEGER NOT NULL DEFAULT 0,
+            sensitive_trust INTEGER NOT NULL DEFAULT 0,
+            last_host TEXT,
+            last_port INTEGER NOT NULL DEFAULT 0,
+            updated_utc TEXT NOT NULL);
         """,
     ];
 
@@ -194,48 +209,80 @@ public sealed class CusDatabase : IDisposable
         }
     }
 
-    // ---------------------------------------------------------------- lista di fiducia
+    // ---------------------------------------------------------------- amici
 
-    public IReadOnlyList<TrustEntry> GetTrustEntries()
+    public IReadOnlyList<Friend> GetFriends()
     {
         lock (_gate)
         {
-            using var command = Command("SELECT kind, actor_public, subject_public, subject_name, created_utc, signature FROM trust_entries ORDER BY created_utc, entry_id;");
-            using var reader = command.ExecuteReader();
-            var result = new List<TrustEntry>();
-            while (reader.Read())
-            {
-                result.Add(new TrustEntry(
-                    reader.GetString(0) == "pair" ? TrustEntryKind.Pair : TrustEntryKind.Revoke,
-                    (byte[])reader[1],
-                    (byte[])reader[2],
-                    reader.GetString(3),
-                    DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
-                    (byte[])reader[5]));
-            }
-
-            return result;
+            using var command = Command($"{FriendColumns} ORDER BY display_name COLLATE NOCASE, device_id;");
+            return ReadFriends(command);
         }
     }
 
-    /// <returns>True se la voce era nuova.</returns>
-    public bool AddTrustEntry(TrustEntry entry)
+    public Friend? GetFriend(string deviceId)
+    {
+        lock (_gate)
+        {
+            using var command = Command($"{FriendColumns} WHERE device_id = $id;");
+            command.Parameters.AddWithValue("$id", deviceId);
+            return ReadFriends(command).FirstOrDefault();
+        }
+    }
+
+    public void UpsertFriend(Friend friend)
     {
         lock (_gate)
         {
             using var command = Command("""
-                INSERT OR IGNORE INTO trust_entries (entry_id, kind, actor_public, subject_public, subject_name, created_utc, signature)
-                VALUES ($id, $kind, $actor, $subject, $name, $created, $sig);
+                INSERT INTO friends (device_id, display_name, agreement, sensitive_trust, last_host, last_port, updated_utc)
+                VALUES ($id, $name, $agreement, $trust, $host, $port, $updated)
+                ON CONFLICT(device_id) DO UPDATE SET display_name = $name, agreement = $agreement, sensitive_trust = $trust,
+                    last_host = $host, last_port = $port, updated_utc = $updated;
                 """);
-            command.Parameters.AddWithValue("$id", entry.EntryId);
-            command.Parameters.AddWithValue("$kind", entry.Kind == TrustEntryKind.Pair ? "pair" : "revoke");
-            command.Parameters.AddWithValue("$actor", entry.ActorPublicKey);
-            command.Parameters.AddWithValue("$subject", entry.SubjectPublicKey);
-            command.Parameters.AddWithValue("$name", entry.SubjectName);
-            command.Parameters.AddWithValue("$created", entry.CreatedUtc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture));
-            command.Parameters.AddWithValue("$sig", entry.Signature);
-            return command.ExecuteNonQuery() == 1;
+            command.Parameters.AddWithValue("$id", friend.DeviceId);
+            command.Parameters.AddWithValue("$name", friend.DisplayName);
+            command.Parameters.AddWithValue("$agreement", (int)friend.Agreement);
+            command.Parameters.AddWithValue("$trust", friend.TrustedWithSensitive ? 1 : 0);
+            command.Parameters.AddWithValue("$host", (object?)friend.LastHost ?? DBNull.Value);
+            command.Parameters.AddWithValue("$port", friend.LastPort);
+            command.Parameters.AddWithValue("$updated", friend.UpdatedUtc.ToString("O", CultureInfo.InvariantCulture));
+            command.ExecuteNonQuery();
         }
+    }
+
+    /// <returns>True se c'era.</returns>
+    public bool DeleteFriend(string deviceId)
+    {
+        lock (_gate)
+        {
+            using var command = Command("DELETE FROM friends WHERE device_id = $id;");
+            command.Parameters.AddWithValue("$id", deviceId);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    private const string FriendColumns =
+        "SELECT device_id, display_name, agreement, sensitive_trust, last_host, last_port, updated_utc FROM friends";
+
+    private static List<Friend> ReadFriends(SqliteCommand command)
+    {
+        using var reader = command.ExecuteReader();
+        var result = new List<Friend>();
+        while (reader.Read())
+        {
+            var agreement = (AgreementLevel)reader.GetInt32(2);
+            result.Add(new Friend(
+                reader.GetString(0),
+                reader.GetString(1),
+                Enum.IsDefined(agreement) ? agreement : AgreementLevel.None,
+                reader.GetInt32(3) != 0,
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.GetInt32(5),
+                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
+        }
+
+        return result;
     }
 
     // ---------------------------------------------------------------- cronologia (solo sull'host)

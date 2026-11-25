@@ -59,5 +59,5 @@ Name: "{autodesktop}\CUS"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,CUS}"; Flags: nowait postinstall skipifsilent
 
-; I dati utente (%LOCALAPPDATA%\CUS: DB cifrato, identità, chiavi dei PC abbinati) NON vengono
-; rimossi alla disinstallazione: perderli significherebbe dover rifare tutti gli abbinamenti.
+; I dati utente (%LOCALAPPDATA%\CUS: DB cifrato, identità, amici con patti e fiducia) NON vengono
+; rimossi alla disinstallazione: perderli significherebbe dover rifare tutti i patti.

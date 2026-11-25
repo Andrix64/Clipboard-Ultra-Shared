@@ -21,15 +21,16 @@ public sealed class SessionTests : IAsyncLifetime
     public async Task TwoNodes_ShareClipboardBothWays_WithoutBounce()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
 
-        var result = await andrea.InviteAsync(luca);
+        var result = await luca.JoinAsync(andrea);
 
-        Assert.Equal(InviteOutcome.Accepted, result.Outcome);
-        Assert.Equal("andrea", Assert.Single(luca.Consent.Requests).HostName);
-        await Eventually.TrueAsync(() => luca.Node.Session?.Role == SessionRole.Member, "luca è membro");
+        Assert.Equal(JoinOutcome.Accepted, result.Outcome);
+        Assert.Equal("luca", Assert.Single(andrea.Consent.Requests).RequesterName);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 2, "andrea vede luca");
+        Assert.Equal(SessionRole.Member, luca.Node.Session?.Role);
         Assert.True(andrea.Overlay.IsVisible);
         Assert.True(luca.Overlay.IsVisible);
-        Assert.Equal(2, andrea.Node.Session!.Participants.Count);
 
         luca.Copy("file da Luca");
         await Eventually.TrueAsync(() => andrea.Text == "file da Luca", "andrea riceve la copia di luca");
@@ -45,30 +46,33 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Rejected_StartsNoSession()
+    public async Task Rejected_StartsNoSessionForTheRequester()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        luca.Consent.Decision = ConsentDecision.Reject;
+        await andrea.ShowAsync();
+        andrea.Consent.Decision = ConsentDecision.Reject;
 
-        var result = await andrea.InviteAsync(luca);
+        var result = await luca.JoinAsync(andrea);
 
-        Assert.Equal(InviteOutcome.Rejected, result.Outcome);
-        Assert.Null(andrea.Node.Session);
+        Assert.Equal(JoinOutcome.Rejected, result.Outcome);
         Assert.Null(luca.Node.Session);
+        Assert.False(andrea.Node.Session!.IsSharing);
         Assert.False(andrea.Overlay.IsVisible);
+        Assert.False(luca.Overlay.IsVisible);
     }
 
     [Fact]
-    public async Task ReadOnlyInvite_MemberReceives_ButDoesNotSend()
+    public async Task ReadOnlyGrant_MemberReceives_ButDoesNotSend()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        andrea.Consent.Decision = ConsentDecision.AcceptReadOnly;
 
-        var result = await andrea.InviteAsync(luca, ShareDirection.ReadOnly);
+        var result = await luca.JoinAsync(andrea);
 
-        Assert.Equal(InviteOutcome.AcceptedReadOnly, result.Outcome);
-        Assert.Equal(ShareDirection.ReadOnly, Assert.Single(luca.Consent.Requests).RequestedDirection);
-        Assert.Contains(andrea.Node.Session!.Participants, p => p.Direction == ShareDirection.ReadOnly);
-        await Eventually.TrueAsync(() => luca.Node.Session?.Role == SessionRole.Member, "luca è membro");
+        Assert.Equal(JoinOutcome.AcceptedReadOnly, result.Outcome);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Any(p => p.Direction == ShareDirection.ReadOnly) == true, "l'host vede la sola lettura");
+        Assert.Equal(ShareDirection.ReadOnly, luca.Node.Session!.MyDirection);
 
         andrea.Copy("dall'host");
         await Eventually.TrueAsync(() => luca.Text == "dall'host", "il membro in sola lettura riceve");
@@ -80,30 +84,13 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BidirectionalInvite_CanBeAcceptedReadOnly()
-    {
-        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        luca.Consent.Decision = ConsentDecision.AcceptReadOnly;
-
-        var result = await andrea.InviteAsync(luca);
-
-        Assert.Equal(InviteOutcome.AcceptedReadOnly, result.Outcome);
-        Assert.Equal(ShareDirection.Bidirectional, Assert.Single(luca.Consent.Requests).RequestedDirection);
-        await Eventually.TrueAsync(() => luca.Node.Session?.Role == SessionRole.Member, "luca è membro");
-
-        andrea.Copy("dall'host");
-        await Eventually.TrueAsync(() => luca.Text == "dall'host", "il membro in sola lettura riceve");
-        luca.Copy("resta da Luca");
-        await Task.Delay(300);
-        Assert.Equal("dall'host", andrea.Text);
-    }
-
-    [Fact]
     public async Task ReadOnlyMember_ReceivesOtherMembersCopies_AndHistory()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
-        await host.InviteAsync(b);
-        await host.InviteAsync(c, ShareDirection.ReadOnly);
+        await host.ShowAsync();
+        await b.JoinAsync(host);
+        host.Consent.Decision = ConsentDecision.AcceptReadOnly;
+        await c.JoinAsync(host);
         await Eventually.TrueAsync(() => c.Node.Session?.Participants.Count == 3, "c vede tutti i partecipanti");
 
         b.Copy("da b");
@@ -120,8 +107,9 @@ public sealed class SessionTests : IAsyncLifetime
     public async Task Group_HostDistributes_AndLastArrivedWinsEverywhere()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
-        await host.InviteAsync(b);
-        await host.InviteAsync(c);
+        await host.ShowAsync();
+        await b.JoinAsync(host);
+        await c.JoinAsync(host);
         await Eventually.TrueAsync(() => b.Node.Session?.Participants.Count == 3, "b vede tre partecipanti");
 
         b.Copy("da b");
@@ -139,19 +127,25 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MemberLeaving_EndsTwoPersonSession_ButNotGroup()
+    public async Task MemberLeaving_KeepsTheGroup_AndHiddenHostWithoutMembersEndsTheSession()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
-        await host.InviteAsync(b);
-        await host.InviteAsync(c);
+        await host.ShowAsync();
+        await b.JoinAsync(host);
+        await c.JoinAsync(host);
 
         await c.Node.LeaveSessionAsync();
         await Eventually.TrueAsync(() => host.Node.Session?.Participants.Count == 2, "c è uscito");
         Assert.Null(c.Node.Session);
         Assert.False(c.Overlay.IsVisible);
 
+        // L'host smette di offrirsi: la sessione resta per chi c'è già...
+        await host.Node.SetVisibleAsync(false);
+        Assert.Equal(2, host.Node.Session?.Participants.Count);
+
+        // ...e senza membri termina.
         b.Overlay.Click();
-        await Eventually.TrueAsync(() => host.Node.Session is null, "senza membri la sessione termina");
+        await Eventually.TrueAsync(() => host.Node.Session is null, "senza membri e non visibile la sessione termina");
         Assert.False(host.Overlay.IsVisible);
     }
 
@@ -159,8 +153,9 @@ public sealed class SessionTests : IAsyncLifetime
     public async Task HostDisconnecting_EndsSessionForEveryone()
     {
         var (host, b, c) = (await Start("host"), await Start("b"), await Start("c"));
-        await host.InviteAsync(b);
-        await host.InviteAsync(c);
+        await host.ShowAsync();
+        await b.JoinAsync(host);
+        await c.JoinAsync(host);
 
         await host.StopAsync();
 
@@ -170,12 +165,13 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SensitiveContent_IsNeverSent()
+    public async Task SensitiveContent_IsNotSentToUntrustedMembers()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        await andrea.InviteAsync(luca);
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
 
-        andrea.Clipboard.Copy(ClipboardContent.FromText("password-segreta", isMarkedSensitive: true));
+        andrea.CopySensitive("password-segreta");
         andrea.Copy("testo normale");
 
         await Eventually.TrueAsync(() => luca.Text == "testo normale", "il testo normale arriva");
@@ -187,7 +183,8 @@ public sealed class SessionTests : IAsyncLifetime
     public async Task Images_AreShared()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
-        await andrea.InviteAsync(luca);
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
         var png = Core.Imaging.PngCodec.Encode(new Core.Imaging.RgbaImage(1, 1, [1, 2, 3, 4]));
 
         andrea.Clipboard.Copy(ClipboardContent.FromImage(png));
@@ -199,7 +196,8 @@ public sealed class SessionTests : IAsyncLifetime
     public async Task History_Last20_OnHost_VisibleToMember_AndKeptAfterSession()
     {
         var (host, member) = (await Start("host"), await Start("member"));
-        await host.InviteAsync(member);
+        await host.ShowAsync();
+        await member.JoinAsync(host);
 
         for (var i = 1; i <= 25; i++)
         {
@@ -216,7 +214,9 @@ public sealed class SessionTests : IAsyncLifetime
         Assert.Equal("voce 6", member.Text);
 
         await member.Node.LeaveSessionAsync();
-        await Eventually.TrueAsync(() => host.Node.Session is null, "sessione terminata");
+        await Eventually.TrueAsync(() => host.Node.Session?.IsSharing != true, "il membro è uscito");
+        await host.Node.LeaveSessionAsync();
+        Assert.Null(host.Node.Session);
         Assert.Equal(20, (await host.Node.GetHistoryAsync()).Count);
 
         await host.Node.UseHistoryEntryAsync((await host.Node.GetHistoryAsync())[^1]);
@@ -224,15 +224,39 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SecondInvite_WhileInSession_IsRejected()
+    public async Task Join_ToSomeoneAlreadyMemberElsewhere_IsRejected()
     {
         var (a, b, c) = (await Start("a"), await Start("b"), await Start("c"));
-        await a.InviteAsync(b);
+        await a.ShowAsync();
+        await b.JoinAsync(a);
 
-        var result = await c.InviteAsync(b);
+        var result = await c.JoinAsync(b);
 
-        Assert.Equal(InviteOutcome.Rejected, result.Outcome);
-        Assert.Contains("altra sessione", result.Reason);
+        Assert.Equal(JoinOutcome.Rejected, result.Outcome);
+        Assert.Contains("è già in una condivisione", result.Reason);
+        Assert.Null(c.Node.Session);
+    }
+
+    [Fact]
+    public async Task CurrentClipboard_DescribesTextAndFiles_WithTheOriginName()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+
+        andrea.Copy("ciao!");
+        await Eventually.TrueAsync(() => luca.Node.CurrentClipboard?.Title == "testo di 5 caratteri", "luca vede il riepilogo del testo");
+        Assert.Equal("andrea", luca.Node.CurrentClipboard!.OriginName);
+        Assert.Equal(5, luca.Node.CurrentClipboard.SizeBytes);
+        Assert.Equal("andrea", andrea.Node.CurrentClipboard?.OriginName);
+        Assert.True(andrea.Node.CurrentClipboard!.IsShared);
+        Assert.Equal("testo di 5 caratteri", luca.Overlay.State?.Current?.Title);
+
+        var files = TestFiles.Create(_root.Path, "luca-files", ("progetto/a.txt", 10), ("progetto/b.txt", 20));
+        luca.Clipboard.Copy(ClipboardContent.FromFiles(files));
+        await Eventually.TrueAsync(() => andrea.Node.CurrentClipboard?.Title == "progetto", "andrea vede il nome della cartella");
+        Assert.Equal("luca", andrea.Node.CurrentClipboard!.OriginName);
+        Assert.Equal(30, andrea.Node.CurrentClipboard.SizeBytes);
     }
 
     private async Task<TestNode> Start(string name)

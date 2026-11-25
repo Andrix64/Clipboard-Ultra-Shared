@@ -8,17 +8,89 @@ public enum ShareDirection
     ReadOnly,
 }
 
-public sealed record SessionParticipant(string DisplayName, ShareDirection Direction, bool IsHost);
-
-public sealed record SessionIndicatorState(IReadOnlyList<SessionParticipant> Participants);
+/// <param name="Direction">Modalità attiva: la più restrittiva tra quella concessa dall'host e quella scelta dal membro.</param>
+/// <param name="Granted">Modalità concessa dall'host.</param>
+/// <param name="IsSelf">È questo PC.</param>
+public sealed record SessionParticipant(
+    string DeviceId,
+    string DisplayName,
+    ShareDirection Direction,
+    ShareDirection Granted,
+    bool IsHost,
+    bool IsSelf);
 
 /// <summary>
-/// Indicatore sempre in primo piano su tutti i monitor che segnala la condivisione attiva.
-/// Un clic sull'indicatore chiede di uscire dalla sessione.
+/// Ciò che c'è ora nella clipboard condivisa, come lo mostrano indicatore e finestra principale.
+/// Mai il contenuto vero: solo tipo, nome e dimensione.
+/// </summary>
+/// <param name="Title">"testo di N caratteri", nome del file o della cartella, "N elementi", "contenuto sensibile".</param>
+/// <param name="SizeBytes">Null per i contenuti sensibili: anche la lunghezza di una password è un'informazione.</param>
+/// <param name="IsShared">False se la copia è rimasta su questo PC (sola lettura, contenuto sensibile non concesso).</param>
+public sealed record ClipboardSummary(
+    string OriginDeviceId,
+    string OriginName,
+    ClipboardContentKind Kind,
+    string Title,
+    long? SizeBytes,
+    bool IsSensitive,
+    bool IsShared)
+{
+    public static ClipboardSummary From(ClipboardContent content, string originDeviceId, string originName, bool isSensitive, bool isShared)
+    {
+        if (isSensitive)
+            return new(originDeviceId, originName, content.Kind, "contenuto sensibile", null, true, isShared);
+
+        var (title, size) = content.Kind switch
+        {
+            ClipboardContentKind.Text => ($"testo di {(content.Text ?? "").Length:N0} caratteri", (long)System.Text.Encoding.UTF8.GetByteCount(content.Text ?? "")),
+            ClipboardContentKind.Image => ("immagine", (long)(content.ImagePng?.Length ?? 0)),
+            ClipboardContentKind.Files => (DescribeFiles(content.Files ?? []), content.Files?.Sum(f => f.SizeBytes) ?? 0),
+            _ => ("contenuto sconosciuto", 0L),
+        };
+        return new(originDeviceId, originName, content.Kind, title, size, false, isShared);
+    }
+
+    /// <summary>
+    /// Nome dell'elemento copiato: il file o la cartella se è uno solo (i nomi in elenco sono percorsi
+    /// relativi, "cartella/a.txt"), altrimenti quanti elementi.
+    /// </summary>
+    private static string DescribeFiles(IReadOnlyList<ClipboardFileInfo> files)
+    {
+        var roots = files.Select(f => f.Name.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return roots.Count switch
+        {
+            0 => "nessun file",
+            1 => roots[0],
+            _ => $"{roots.Count} elementi",
+        };
+    }
+}
+
+/// <param name="Current">Ultimo contenuto della clipboard condivisa, null se ancora nessuno.</param>
+/// <param name="Transfers">Trasferimenti di file di questo PC (in corso o appena finiti).</param>
+/// <param name="ActiveTransfers">Quanti di questi sono ancora in corso.</param>
+/// <param name="CanToggleDirection">Membro con accesso bidirezionale: può passare a sola lettura e tornare indietro.</param>
+public sealed record SessionIndicatorState(
+    IReadOnlyList<SessionParticipant> Participants,
+    ClipboardSummary? Current = null,
+    int Transfers = 0,
+    int ActiveTransfers = 0,
+    bool CanToggleDirection = false,
+    ShareDirection MyDirection = ShareDirection.Bidirectional);
+
+/// <summary>
+/// Indicatore sempre in primo piano su tutti i monitor che segnala la condivisione attiva e mostra
+/// cosa c'è nella clipboard condivisa. Un doppio clic chiede di uscire dalla sessione.
 /// </summary>
 public interface IOverlayIndicator : IDisposable
 {
     event EventHandler? LeaveRequested;
+
+    /// <summary>Il proprietario dei file chiede di vedere i trasferimenti in corso.</summary>
+    event EventHandler? TransfersRequested;
+
+    /// <summary>Il membro chiede di passare da bidirezionale a sola lettura o viceversa.</summary>
+    event EventHandler? DirectionToggleRequested;
 
     void Show(SessionIndicatorState state);
 

@@ -45,7 +45,8 @@ public sealed class EndToEndFileTests : IAsyncLifetime
                 received.TrySetResult();
         };
 
-        Assert.Equal(InviteOutcome.Accepted, (await andrea.InviteAsync("127.0.0.1", luca.Port)).Outcome);
+        await andrea.SetVisibleAsync(true);
+        Assert.Equal(JoinOutcome.Accepted, (await luca.JoinAsync("127.0.0.1", andrea.Port)).Outcome);
         andreaClipboard.Copy(ClipboardContent.FromFiles(LocalFileList.FromPaths([original])));
         await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
@@ -149,6 +150,9 @@ public sealed class EndToEndFileTests : IAsyncLifetime
     {
         public Task<ConsentDecision> AskAsync(ConsentRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(ConsentDecision.Accept);
+
+        public Task<bool> AskAgreementAsync(AgreementRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
     }
 
     private sealed class SilentNotifier : IUserNotifier

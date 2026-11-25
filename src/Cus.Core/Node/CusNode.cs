@@ -2,36 +2,33 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Channels;
 using Cus.Core.Abstractions;
-using Cus.Core.Crypto;
+using Cus.Core.Friends;
 using Cus.Core.Hosting;
 using Cus.Core.Identity;
 using Cus.Core.Net;
 using Cus.Core.Storage;
-using Cus.Core.Trust;
 
 namespace Cus.Core.Node;
 
 /// <summary>
-/// Nodo CUS senza UI: rete, sessioni con host, abbinamento, lista di fiducia e clipboard.
+/// Nodo CUS senza UI: rete, visibilità come host, sessioni, amici e clipboard.
 /// La UI e i test lo usano allo stesso modo; le parti native arrivano dalle interfacce.
 /// </summary>
 public sealed partial class CusNode : IAsyncDisposable
 {
     private static readonly TimeSpan FirstMessageTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>Lista di fiducia da chi non è nel gruppo: in genere vuota, comunque non più di così.</summary>
-    private const int PreTrustSyncMaxBytes = 1024 * 1024;
+    /// <summary>Livello del patto: un numero, nient'altro.</summary>
+    private const int FriendSyncMaxBytes = 1024;
 
-    /// <summary>Primo messaggio (invito o avvio dell'abbinamento): piccolo.</summary>
+    /// <summary>Primo messaggio (richiesta di ingresso): piccolo.</summary>
     private const int FirstMessageMaxBytes = 64 * 1024;
 
     /// <summary>Connessioni in fase iniziale da uno stesso indirizzo (il loopback, usato dalle istanze locali, è escluso).</summary>
     private const int MaxPendingIncomingPerAddress = 4;
     private static readonly TimeSpan FileReadTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan SyncInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(15);
 
     /// <summary>Connessioni in ingresso non ancora concluse (handshake, primo messaggio, consenso).</summary>
@@ -52,11 +49,19 @@ public sealed partial class CusNode : IAsyncDisposable
     private readonly ConcurrentDictionary<PeerConnection, byte> _connections = new();
     private readonly ConcurrentDictionary<Task, byte> _background = new();
     private readonly ConcurrentDictionary<string, (DiscoveryAnnouncement Announcement, DateTimeOffset Seen)> _discovered = new();
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSync = new();
     private readonly Lock _offerGate = new();
     private readonly SemaphoreSlim _incomingSlots = new(MaxPendingIncoming, MaxPendingIncoming);
     private readonly ConcurrentDictionary<IPAddress, int> _pendingByAddress = new();
     private readonly SemaphoreSlim _fileReadSlots = new(8, 8);
+
+    /// <summary>Letture di file in corso per connessione (vedi <see cref="MaxFileReadsPerConnection"/>).</summary>
+    private readonly ConcurrentDictionary<PeerConnection, int> _fileReadsByConnection = new();
+
+    /// <summary>
+    /// Letture di file in corso da una sola connessione. L'host inoltra sulla stessa connessione
+    /// quelle di tutti i membri che incollano, quindi il limite non è stretto.
+    /// </summary>
+    private const int MaxFileReadsPerConnection = 16;
 
     /// <summary>Le copie locali si elaborano una alla volta, nell'ordine in cui sono avvenute.</summary>
     private readonly Channel<ClipboardChangedEventArgs> _localChanges = Channel.CreateUnbounded<ClipboardChangedEventArgs>(
@@ -67,9 +72,6 @@ public sealed partial class CusNode : IAsyncDisposable
     private Task? _acceptLoop;
     private HostSession? _hostSession;
     private MemberSession? _memberSession;
-    private (string ItemId, IReadOnlyList<ClipboardFileInfo> Files)? _localOffer;
-    private PairingCode? _pairingCode;
-    private int _syncScheduled;
     private long _clipboardStamp;
     private long _lastRemoteWriteStamp;
     private int _consentPending;
@@ -92,68 +94,86 @@ public sealed partial class CusNode : IAsyncDisposable
         _overlay = overlay;
         _consent = consent;
         _notifier = notifier;
-        Trust = new TrustLog(database, identity);
-        Trust.Changed += (_, _) => RunInBackground(OnTrustChangedAsync);
+        Friends = new FriendStore(database);
+        Friends.Changed += (_, _) => PeersChanged?.Invoke(this, EventArgs.Empty);
         _monitor.Changed += (_, e) => _localChanges.Writer.TryWrite(e);
         _overlay.LeaveRequested += (_, _) => RunInBackground(() => LeaveSessionAsync());
+        _overlay.TransfersRequested += (_, _) => TransfersRequested?.Invoke(this, EventArgs.Empty);
+        _overlay.DirectionToggleRequested += (_, _) => RunInBackground(ToggleMyDirectionAsync);
     }
 
     public DeviceIdentity Identity { get; }
 
-    public TrustLog Trust { get; }
+    /// <summary>Patti reciproci e fiducia per i contenuti sensibili.</summary>
+    public FriendStore Friends { get; }
 
     /// <summary>Porta TCP effettiva, nota dopo <see cref="StartAsync"/>.</summary>
     public int Port { get; private set; }
 
     public SessionView? Session { get; private set; }
 
-    public PairingCode? ActivePairingCode
-    {
-        get
-        {
-            var code = _pairingCode;
-            return code is not null && code.ExpiresAt > DateTimeOffset.UtcNow && code.AttemptsLeft > 0 ? code : null;
-        }
-    }
+    /// <summary>Ultimo contenuto della clipboard di questo PC, come lo mostra l'indicatore.</summary>
+    public ClipboardSummary? CurrentClipboard { get; private set; }
 
+    /// <summary>Sessione, visibilità, partecipanti, modalità: tutto ciò che mostra lo stato.</summary>
     public event EventHandler? SessionChanged;
 
     public event EventHandler? PeersChanged;
 
-    public event EventHandler? PairingCodeChanged;
+    public event EventHandler? CurrentClipboardChanged;
+
+    /// <summary>L'utente ha chiesto dall'indicatore di vedere i trasferimenti dei suoi file.</summary>
+    public event EventHandler? TransfersRequested;
 
     /// <summary>Righe di attività leggibili (copie inviate e ricevute, ingressi e uscite).</summary>
     public event Action<string>? Activity;
 
-    /// <summary>Peer manuali e scoperti in rete, senza questo dispositivo.</summary>
+    /// <summary>
+    /// Host visibili in rete, amici con patto "in qualsiasi momento" all'ultimo indirizzo noto e
+    /// indirizzi inseriti a mano. Senza questo dispositivo.
+    /// </summary>
     public IReadOnlyList<PeerView> Peers
     {
         get
         {
             var now = DateTimeOffset.UtcNow;
-            var trust = Trust.State;
-            // Gli annunci non sono autenticati: "IsTrusted" dice solo che l'annuncio usa l'ID di un
-            // dispositivo abbinato. L'identità vera si verifica alla connessione (InviteAsync con l'ID atteso).
+            var friends = Friends.All.ToDictionary(f => f.DeviceId);
+            // Gli annunci non sono autenticati: l'identità vera si verifica alla connessione
+            // (JoinAsync con l'ID atteso), quindi un annuncio con l'ID di un amico non lo diventa.
             var result = _discovered.Values
-                .Where(d => now - d.Seen < PeerExpiry && d.Announcement.DeviceId != Identity.DeviceId && !trust.IsRevoked(d.Announcement.DeviceId))
+                .Where(d => now - d.Seen < PeerExpiry && d.Announcement.DeviceId != Identity.DeviceId)
                 .Select(d => new PeerView(d.Announcement.DeviceId, d.Announcement.DisplayName, d.Announcement.UserName,
-                    d.Announcement.Host, d.Announcement.Port, trust.IsTrusted(d.Announcement.DeviceId), IsManual: false))
+                    d.Announcement.Host, d.Announcement.Port, d.Announcement.Participants, IsAnnounced: true,
+                    friends.TryGetValue(d.Announcement.DeviceId, out var f) ? f.Agreement : AgreementLevel.None, IsManual: false))
                 .ToList();
-            foreach (var (id, device) in trust.Trusted)
+            foreach (var friend in friends.Values)
             {
-                if (result.Any(p => p.DeviceId == id) || KnownEndpoint(id) is not { } known)
+                if (friend.Agreement != AgreementLevel.Anytime || result.Any(p => p.DeviceId == friend.DeviceId) || friend.LastEndpoint is not { } known)
                     continue;
-                result.Add(new PeerView(id, device.DisplayName, "", known.Host, known.Port, IsTrusted: true, IsManual: false));
+                result.Add(new PeerView(friend.DeviceId, friend.DisplayName, "", known.Host, known.Port, 0, IsAnnounced: false, friend.Agreement, IsManual: false));
             }
 
             foreach (var manual in ManualPeers())
             {
                 if (!result.Any(p => p.Host == manual.Host && p.Port == manual.Port))
-                    result.Add(new PeerView(null, manual.ToString(), "", manual.Host, manual.Port, IsTrusted: false, IsManual: true));
+                    result.Add(new PeerView(null, manual.ToString(), "", manual.Host, manual.Port, 0, IsAnnounced: false, AgreementLevel.None, IsManual: true));
             }
 
-            return result.OrderByDescending(p => p.IsTrusted).ThenBy(p => p.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToList();
+            return result
+                .OrderByDescending(p => p.IsAnnounced)
+                .ThenByDescending(p => p.Agreement)
+                .ThenBy(p => p.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
         }
+    }
+
+    // ================================================================ impostazioni
+
+    /// <summary>Alla chiusura della finestra CUS resta attivo nell'area di notifica.</summary>
+    public bool KeepRunningInBackground
+    {
+        get => _database.GetSetting("ui/run-in-background") != "0";
+        set => _database.SetSetting("ui/run-in-background", value ? "1" : "0");
     }
 
     /// <summary>Crea o carica l'identità del profilo.</summary>
@@ -169,18 +189,6 @@ public sealed partial class CusNode : IAsyncDisposable
         return identity;
     }
 
-    /// <summary>
-    /// Nuova identità (nuova coppia di chiavi): serve per riabbinare un dispositivo revocato.
-    /// Va chiamata a nodo fermo; il nodo successivo userà la nuova identità.
-    /// </summary>
-    public static DeviceIdentity ResetIdentity(CusDatabase database)
-    {
-        var old = database.LoadIdentity();
-        var identity = DeviceIdentity.Generate(old?.DisplayName ?? Environment.MachineName, old?.UserName ?? Environment.UserName);
-        database.SaveIdentity(identity);
-        return identity;
-    }
-
     public async Task StartAsync()
     {
         _listener = BindListener();
@@ -191,7 +199,7 @@ public sealed partial class CusNode : IAsyncDisposable
         {
             try
             {
-                _discovery = new Discovery(() => new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port), _options.DiscoveryPort);
+                _discovery = new Discovery(AnnouncementOrNull, _options.DiscoveryPort);
                 _discovery.Announced += OnAnnounced;
                 _discovery.Start();
             }
@@ -203,9 +211,9 @@ public sealed partial class CusNode : IAsyncDisposable
         }
 
         RunInBackground(ProcessLocalChangesAsync);
+        RunInBackground(WatchTransfersAsync);
         _monitor.Start();
         Log($"In ascolto sulla porta {Port}.");
-        RunInBackground(SyncWithKnownDevicesAsync);
         await Task.CompletedTask;
     }
 
@@ -218,6 +226,15 @@ public sealed partial class CusNode : IAsyncDisposable
         catch (Exception ex)
         {
             System.Diagnostics.Trace.WriteLine($"CUS: uscita dalla sessione fallita: {ex.Message}");
+        }
+
+        try
+        {
+            await SetVisibleAsync(false);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.WriteLine($"CUS: congedo dalla rete fallito: {ex.Message}");
         }
 
         _lifetime.Cancel();
@@ -389,50 +406,36 @@ public sealed partial class CusNode : IAsyncDisposable
             ReleaseAddress(address);
     }
 
+    private void ReleaseFileRead(PeerConnection connection)
+    {
+        if (_fileReadsByConnection.AddOrUpdate(connection, 0, (_, n) => n - 1) <= 0)
+            _fileReadsByConnection.TryRemove(new KeyValuePair<PeerConnection, int>(connection, 0));
+    }
+
     private void ReleaseAddress(IPAddress address)
     {
         if (_pendingByAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0)
             _pendingByAddress.TryRemove(new KeyValuePair<IPAddress, int>(address, 0));
     }
 
-    /// <summary>Handshake, saluto e scambio della lista di fiducia: comune a ogni connessione.</summary>
-    /// <param name="shareWith">Dispositivi a cui consegnare la lista anche se ora non sono fidati (auto-revoca).</param>
-    private async Task<PeerConnection> SetUpConnectionAsync(PeerConnection connection, IReadOnlySet<string>? shareWith = null)
+    /// <summary>
+    /// Handshake, saluto e scambio del livello del patto: comune a ogni connessione. Entrambi tengono
+    /// il più basso dei due, così un patto sciolto da una parte (magari a PC spento) cade anche dall'altra.
+    /// </summary>
+    private async Task<PeerConnection> SetUpConnectionAsync(PeerConnection connection)
     {
         _connections[connection] = 0;
         connection.Closed += (c, _1) => _connections.TryRemove(c, out byte _);
 
-        var remoteId = connection.Remote.DeviceId;
-        var inGroup = Trust.State.IsGroupMember(remoteId);
-        var share = inGroup || shareWith?.Contains(remoteId) == true;
-        await connection.SendAsync(new TrustSyncMessage(share ? Trust.Entries : []));
-        var sync = await connection.ReceiveAsync<TrustSyncMessage>(PeerConnection.HandshakeTimeout,
-            maxBytes: inGroup ? SecureChannel.MaxMessageBytes : PreTrustSyncMaxBytes);
-        if (inGroup)
-        {
-            Trust.Merge(sync.Entries ?? []);
-            _lastSync[remoteId] = DateTimeOffset.UtcNow;
-        }
-
-        if (Trust.State.IsTrusted(remoteId))
-            RememberEndpoint(connection);
-
-        if (Trust.State.SelfRevoked)
-        {
-            await connection.CloseAsync("dispositivo revocato");
-            throw new CusOperationException("Questo dispositivo è stato revocato: genera una nuova identità e riabbinalo.");
-        }
-
-        if (Trust.State.IsRevoked(remoteId))
-        {
-            await connection.CloseAsync("dispositivo revocato");
-            throw new CusOperationException($"{connection.Remote.DisplayName} è un dispositivo revocato.");
-        }
-
+        var remote = connection.Remote;
+        await connection.SendAsync(new FriendSyncMessage(Friends.AgreementWith(remote.DeviceId)));
+        var sync = await connection.ReceiveAsync<FriendSyncMessage>(PeerConnection.HandshakeTimeout, maxBytes: FriendSyncMaxBytes);
+        ApplyFriendSync(connection, sync.Level);
+        RememberEndpoint(connection);
         return connection;
     }
 
-    private async Task<PeerConnection> ConnectAsync(string host, int port, CancellationToken cancellationToken, IReadOnlySet<string>? shareWith = null)
+    private async Task<PeerConnection> ConnectAsync(string host, int port, CancellationToken cancellationToken)
     {
         PeerConnection connection;
         try
@@ -446,7 +449,7 @@ public sealed partial class CusNode : IAsyncDisposable
 
         try
         {
-            return await SetUpConnectionAsync(connection, shareWith);
+            return await SetUpConnectionAsync(connection);
         }
         catch (Exception ex) when (ex is not CusOperationException)
         {
@@ -467,14 +470,11 @@ public sealed partial class CusNode : IAsyncDisposable
             var first = await connection.ReceiveAsync(FirstMessageTimeout, maxBytes: FirstMessageMaxBytes);
             switch (first)
             {
-                case SessionInviteMessage invite:
-                    await HandleInviteAsync(connection, invite);
-                    break;
-                case PairingStartMessage start:
-                    await HandlePairingStartAsync(connection, start);
+                case JoinRequestMessage:
+                    await HandleJoinRequestAsync(connection);
                     break;
                 default:
-                    // Connessione di sola sincronizzazione (o saluto): si chiude.
+                    // Connessione di sola sincronizzazione del patto (o saluto): si chiude.
                     connection.Close("fine");
                     break;
             }
@@ -489,15 +489,26 @@ public sealed partial class CusNode : IAsyncDisposable
         }
     }
 
-    // ================================================================ scoperta e sincronizzazione
+    // ================================================================ scoperta
+
+    /// <summary>Annuncio di questo PC: solo mentre si offre come host.</summary>
+    private AnnouncementPayload? AnnouncementOrNull() =>
+        _visible ? new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port, Math.Max(1, Session?.Participants.Count ?? 1)) : null;
 
     private void OnAnnounced(DiscoveryAnnouncement announcement)
     {
-        // Chiave = ID + indirizzo: un annuncio falso con l'ID di un dispositivo abbinato non sostituisce
-        // quello vero, compare accanto (e l'invito a quell'indirizzo fallisce la verifica d'identità).
+        // Chiave = ID + indirizzo: un annuncio falso con l'ID di un amico non sostituisce quello vero,
+        // compare accanto (e la richiesta a quell'indirizzo fallisce la verifica d'identità).
         var key = $"{announcement.DeviceId}|{announcement.Host}|{announcement.Port}";
+        if (announcement.Hidden)
+        {
+            if (_discovered.TryRemove(key, out _))
+                PeersChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         var now = DateTimeOffset.UtcNow;
-        var isNew = !_discovered.ContainsKey(key);
+        var isNew = !_discovered.TryGetValue(key, out var previous);
         if (isNew && _discovered.Count >= MaxDiscovered)
         {
             foreach (var (oldKey, old) in _discovered)
@@ -511,120 +522,24 @@ public sealed partial class CusNode : IAsyncDisposable
         }
 
         _discovered[key] = (announcement, now);
-        if (isNew)
+        if (isNew || previous.Announcement != announcement)
             PeersChanged?.Invoke(this, EventArgs.Empty);
-
-        if (Trust.State.IsTrusted(announcement.DeviceId)
-            && (!_lastSync.TryGetValue(announcement.DeviceId, out var last) || DateTimeOffset.UtcNow - last > SyncInterval))
-        {
-            _lastSync[announcement.DeviceId] = DateTimeOffset.UtcNow;
-            RunInBackground(() => SyncWithAsync(announcement.Host, announcement.Port, announcement.DeviceId));
-        }
     }
 
-    /// <summary>Sincronizza la lista di fiducia con un dispositivo dell'utente e chiude.</summary>
-    /// <param name="expectedDeviceId">Per gli annunci (non autenticati): l'identità che deve rispondere.</param>
-    public async Task SyncWithAsync(string host, int port, string? expectedDeviceId = null)
+    /// <summary>Annuncia subito lo stato (per esempio quanti sono nella sessione).</summary>
+    private void AnnounceSoon()
     {
-        try
-        {
-            var connection = await ConnectAsync(host, port, _lifetime.Token);
-            if (expectedDeviceId is not null && !string.Equals(connection.Remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
-            {
-                connection.Close("identità diversa da quella annunciata");
-                return;
-            }
-
-            await connection.CloseAsync("sincronizzazione completata");
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.WriteLine($"CUS: sincronizzazione con {host}:{port} non riuscita: {ex.Message}");
-        }
+        if (_visible && _discovery is { } discovery)
+            RunInBackground(discovery.AnnounceNowAsync);
     }
 
-    private async Task SyncWithKnownDevicesAsync()
-    {
-        var targets = Peers.Where(p => p.IsTrusted).ToList();
-        foreach (var peer in targets)
-            await SyncWithAsync(peer.Host, peer.Port);
-    }
-
-    private async Task OnTrustChangedAsync()
-    {
-        var state = Trust.State;
-        PeersChanged?.Invoke(this, EventArgs.Empty);
-
-        if (state.SelfRevoked)
-        {
-            _notifier.Error("Questo dispositivo è stato revocato. Per riabbinarlo genera una nuova identità dalle impostazioni.");
-            await LeaveSessionAsync();
-        }
-
-        // Una revoca chiude subito ogni connessione con il dispositivo revocato.
-        foreach (var connection in _connections.Keys)
-        {
-            if (state.SelfRevoked || state.IsRevoked(connection.Remote.DeviceId))
-                await connection.CloseAsync("dispositivo revocato");
-        }
-
-        // Propaga la lista ai dispositivi dell'utente collegati in questo momento (solo a connessioni
-        // già avviate: in quelle in fase iniziale la lista viaggia comunque nello scambio previsto).
-        foreach (var connection in _connections.Keys.Where(c => c.IsStarted && state.IsTrusted(c.Remote.DeviceId)))
-        {
-            try
-            {
-                await connection.SendAsync(new TrustSyncMessage(Trust.Entries));
-            }
-            catch (IOException)
-            {
-                // Connessione caduta: riceverà la lista alla prossima.
-            }
-        }
-
-        // ...e a quelli raggiungibili ma non collegati. Una sola sincronizzazione alla volta: si
-        // ferma da sola quando nessuno ha più voci nuove.
-        if (!state.SelfRevoked && Interlocked.Exchange(ref _syncScheduled, 1) == 0)
-        {
-            RunInBackground(async () =>
-            {
-                try
-                {
-                    await Task.Delay(200, _lifetime.Token);
-                    Interlocked.Exchange(ref _syncScheduled, 0);
-                    await SyncWithKnownDevicesAsync();
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            });
-        }
-    }
-
-    private PeerEndpoint? KnownEndpoint(string deviceId)
-    {
-        var value = _database.GetSetting($"endpoint/{deviceId}");
-        if (value is null)
-            return null;
-        try
-        {
-            return PeerEndpoint.Parse(value);
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Memorizza dove raggiungere un dispositivo dell'utente (per consegnargli la lista di fiducia).</summary>
+    /// <summary>Memorizza dove raggiungere un amico, anche quando non si annuncia.</summary>
     private void RememberEndpoint(PeerConnection connection)
     {
         if (connection.RemoteEndPoint is not IPEndPoint ip || connection.RemoteListenPort is <= 0 or > 65535)
             return;
         var address = ip.Address.IsIPv4MappedToIPv6 ? ip.Address.MapToIPv4() : ip.Address;
-        var endpoint = new PeerEndpoint(address.ToString(), connection.RemoteListenPort);
-        if (KnownEndpoint(connection.Remote.DeviceId) != endpoint)
-            _database.SetSetting($"endpoint/{connection.Remote.DeviceId}", endpoint.ToString());
+        Friends.RememberEndpoint(connection.Remote.DeviceId, connection.Remote.DisplayName, address.ToString(), connection.RemoteListenPort);
     }
 
     private async Task ProcessLocalChangesAsync()
@@ -651,16 +566,35 @@ public sealed partial class CusNode : IAsyncDisposable
     /// <summary>Gestione dei messaggi validi in qualunque momento della connessione.</summary>
     private bool HandleCommonMessage(PeerConnection connection, CusMessage message)
     {
-        if (message is TrustSyncMessage sync)
+        if (message is FriendSyncMessage sync)
         {
-            if (Trust.State.IsGroupMember(connection.Remote.DeviceId))
-                Trust.Merge(sync.Entries ?? []);
+            ApplyFriendSync(connection, sync.Level);
             return true;
         }
 
         if (message is FileReadRequestMessage read)
         {
-            RunInBackground(() => ServeFileReadAsync(connection, read));
+            // Oltre un certo numero di letture in corso dalla stessa connessione le nuove si
+            // rifiutano subito: una raffica di richieste non lascia gli altri senza risposta.
+            if (_fileReadsByConnection.AddOrUpdate(connection, 1, (_, n) => n + 1) > MaxFileReadsPerConnection)
+            {
+                ReleaseFileRead(connection);
+                RunInBackground(() => SendFileReadReplyAsync(connection,
+                    new FileReadReplyMessage(read.RequestId, null, "Il PC d'origine è occupato a servire altre letture: riprova.")));
+                return true;
+            }
+
+            RunInBackground(async () =>
+            {
+                try
+                {
+                    await ServeFileReadAsync(connection, read);
+                }
+                finally
+                {
+                    ReleaseFileRead(connection);
+                }
+            });
             return true;
         }
 
@@ -671,14 +605,42 @@ public sealed partial class CusNode : IAsyncDisposable
 
     private void Log(string message) => Activity?.Invoke(message);
 
+    /// <summary>Ricalcola la vista della sessione e aggiorna l'indicatore.</summary>
     private void RaiseSessionChanged()
     {
-        Session = _hostSession?.ToView(Identity) ?? _memberSession?.View;
-        if (Session is null)
-            _overlay.Hide();
-        else
-            _overlay.Show(new SessionIndicatorState(Session.Participants));
+        var previousCount = Session?.Participants.Count ?? 0;
+        Session = _hostSession?.ToView(Identity, _visible) ?? _memberSession?.ToView(Identity);
+        UpdateOverlay();
         SessionChanged?.Invoke(this, EventArgs.Empty);
+        if ((Session?.Participants.Count ?? 0) != previousCount)
+            AnnounceSoon();
+    }
+
+    /// <summary>L'indicatore compare solo quando la clipboard è davvero condivisa con qualcuno.</summary>
+    private void UpdateOverlay()
+    {
+        var session = Session;
+        if (session is not { IsSharing: true })
+        {
+            _overlay.Hide();
+            return;
+        }
+
+        var transfers = Transfers;
+        _overlay.Show(new SessionIndicatorState(
+            session.Participants,
+            CurrentClipboard,
+            transfers.Count,
+            transfers.Count(t => t.State == TransferState.Active),
+            CanToggleDirection: session.Role == SessionRole.Member && session.MyGranted == ShareDirection.Bidirectional,
+            session.MyDirection));
+    }
+
+    private void SetCurrentClipboard(ClipboardSummary summary)
+    {
+        CurrentClipboard = summary;
+        UpdateOverlay();
+        CurrentClipboardChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static string Describe(Exception ex) => ex switch
@@ -690,15 +652,4 @@ public sealed partial class CusNode : IAsyncDisposable
     };
 
     private static string NewId() => Convert.ToHexString(RandomNumberGenerator.GetBytes(12));
-
-    internal static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
-
-    internal static byte[] PairingChannelId(byte[] initiatorKey, byte[] responderKey) =>
-        [.. "CUS/pairing/ci/v1"u8, .. initiatorKey, .. responderKey];
-
-    internal static byte[] PairingConfirmation(byte[] isk, char role, byte[] channelId, byte[] sid) =>
-        HMACSHA512.HashData(isk, (byte[])[.. "CUS/pairing/confirm/v1"u8, (byte)role, .. channelId, .. sid]);
-
-    internal static CPace CreateCPace(CPaceRole role, string code, byte[] channelId, byte[] sid) =>
-        CPace.Create(role, Utf8(code), channelId, sid, []);
 }

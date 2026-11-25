@@ -18,7 +18,24 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 >
 > *Su tutti i monitor di entrambi compare un'icona sempre in primo piano, in alto a destra, che indica che la clipboard è condivisa. Da quel momento, se Luca copia un file Andrea lo riceve, e se Andrea copia un file Luca lo riceve.*
 
-## Due modalità
+> [!note]
+> **Ridisegno del 2026-11-25:** il collegamento funziona come AirDrop, l'abbinamento con codice è stato tolto, ci sono amici con patti reciproci e una fiducia per le password. Le regole valide sono nella sezione "Modello del 2026-11-25" qui sotto; le righe superate delle tabelle successive sono marcate.
+
+## Modello del 2026-11-25
+
+- **Visibilità (come AirDrop):** un PC si annuncia in rete solo se l'utente sceglie **Offriti come host**. Chi lo vede chiede di entrare; l'host decide per ognuno se farlo entrare in **bidirezionale** o in **sola lettura**. Quando sono entrati tutti, l'host si **nasconde**: la sessione resta, ma nessun altro può più chiedere. Gli altri vedono nell'elenco **quante persone** ci sono nella sessione di ciascun host visibile.
+- **Permessi in sessione:** l'host cambia la modalità di ogni connesso con un pulsante che alterna bidirezionale e sola lettura. Un membro con accesso bidirezionale può passare da sé a sola lettura e tornare indietro (pulsante nell'indicatore e nella scheda della sessione).
+- **Patti (amici):** dopo averlo fatto entrare, l'host può proporre a un connesso un patto, che il connesso deve accettare. Due livelli: **entra senza conferma** (quando l'altro si offre come host) e **collegamento in qualsiasi momento** (anche se l'altro non si offre; rifiutato con "X è già in una condivisione" se l'altro è membro di un'altra sessione). Il patto vale nei due sensi; se uno dei due lo scioglie cade per entrambi: a ogni connessione i due PC si scambiano il proprio livello e tengono il più basso. Un amico "in qualsiasi momento" si raggiunge all'ultimo indirizzo noto (scelta del 2026-11-25: da nascosto un PC non annuncia nulla, nemmeno un segnale anonimo).
+- **Password (contenuti sensibili):** ognuno decide per le proprie copie. Una copia marcata sensibile va solo agli amici marcati **affidabili** (decisione di un solo lato, dalla scheda AMICI o dall'elenco dei connessi). L'host può dare un **permesso temporaneo**, valido solo per la sessione in corso: le password che copia lui arrivano a tutti. Il permesso copre solo le copie dell'host (scelta del 2026-11-25); quella di un membro passa dall'host solo se il membro si fida dell'host, e l'host la inoltra solo ai partecipanti di cui il membro si fida. Chi la riceve vede "contenuto sensibile" e la sua clipboard la tratta ancora come sensibile; le password non entrano in cronologia.
+- **File:** copiare altro non interrompe un trasferimento già in corso. Il proprietario dei file vede dall'indicatore le copie in corso (a chi vanno, a che punto sono) e le può annullare. Un **nuovo** incolla di file superati dà ancora l'errore chiaro.
+- **Indicatore:** mostra l'ultimo contenuto condiviso (chi l'ha copiato a sinistra, il peso a destra, sotto "testo di N caratteri" o il nome del file accorciato in mezzo con l'estensione sempre visibile) e i partecipanti in piccolo, con un'icona per il ruolo (★ host, ⇄ bidirezionale, ↓ sola lettura) e questo PC evidenziato.
+- **Sempre attivo:** alla chiusura della finestra CUS resta nell'area di notifica (impostazione, attiva di default); "Esci" dal menu dell'icona lo chiude davvero.
+- **Interfaccia:** tre corpi. A sinistra cronologia e impostazioni, al centro la console verde, a destra la ricerca in rete (o, quando ci si offre o si è in sessione, richieste e connessi) e la scheda AMICI.
+- **Fine della sessione e nuovi arrivati (revisione del 2026-11-25):** quando esce l'ultimo membro la sessione finisce anche se l'host resta visibile, e ne parte una nuova, vuota. Chi entra dopo non vede la cronologia dei membri di prima e non eredita il permesso temporaneo per le password. Chi entra a sessione già avviata vede invece la cronologia della sessione in corso.
+- **Richieste insistenti:** dopo una richiesta di ingresso rifiutata, scaduta o annullata, lo stesso dispositivo e lo stesso indirizzo (loopback escluso) aspettano 30 s prima di poter chiedere di nuovo. Chi chiede di entrare mentre si offre come host torna visibile se la richiesta non va a buon fine.
+- **Cosa "nascosto" non nasconde:** da nascosto il PC non si annuncia, ma resta in ascolto per gli amici "in qualsiasi momento". Chi in rete si collega alle porte di CUS vede ancora identità, nome del PC e nome utente di Windows durante il saluto iniziale. Anche gli annunci di "nascosto" non sono autenticati: chiunque in rete può far sparire un host dall'elenco altrui fino al prossimo annuncio.
+
+## Due modalità (superato il 2026-11-25)
 
 | Modalità | Chi | Consenso |
 |---|---|---|
@@ -26,6 +43,9 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 | **Utenti diversi** | Andrea, Luca, eventualmente altri | Richiesta esplicita, accettata da ciascun membro a ogni sessione |
 
 ## Sessioni e ruoli
+
+> [!note]
+> Superato in parte il 2026-11-25: non c'è più l'invito dell'host, si chiede di entrare e l'host sceglie la modalità; vale "Modello del 2026-11-25". Restano validi distribuzione, conflitti, cronologia e uscita dell'host.
 
 - **Host:** chi avvia la sessione e invia le richieste, anche nelle sessioni a due. Nello scenario sopra è Andrea.
 - **Membri:** chi riceve la richiesta e la accetta. Ogni membro dà il consenso **all'host**, non agli altri membri.
@@ -36,7 +56,10 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 - **Cronologia:** sta solo sull'host. I membri la consultano durante la sessione, chiedendola all'host, e vedono solo le voci della sessione in corso. A fine sessione le voci restano nel DB dell'host.
 - **Uscita dell'host:** se l'host si disconnette, la sessione termina per tutti. Non c'è passaggio di ruolo.
 
-## Flusso
+## Flusso (superato il 2026-11-25)
+
+> [!note]
+> Il flusso con l'invito dell'host e i dispositivi abbinati è stato sostituito: vedi "Modello del 2026-11-25".
 
 1. Ogni PC esegue il servizio CUS, che si annuncia sulla rete locale (scoperta automatica dei peer).
 2. L'host sceglie uno o più peer dalla lista, oppure ne inserisce IP o nome host a mano, sceglie la modalità (bidirezionale o sola lettura) e invia la richiesta.
@@ -63,10 +86,10 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 | **Indicatore** | Mostra i partecipanti alla sessione. |
 | **File grandi** | **Lazy:** alla copia si annunciano solo i metadati (nome, dimensione, tipo). Il contenuto si trasferisce quando l'altro incolla. |
 | **Peer d'origine non disponibile** | Se si incolla un file e il PC d'origine è spento o ha già copiato altro, compare un **errore chiaro**. Nessun tentativo silenzioso. |
-| **Filtri di sicurezza** | Si **esclude in automatico** ciò che i password manager marcano come sensibile: quei contenuti non lasciano mai il PC. |
-| **Identità** | **Abbinamento con codice**, per utente. Il codice alimenta uno **scambio di chiavi autenticato da password: CPace-ristretto255-SHA512**, implementato in C# sopra **libsodium** (vedi sotto). Niente fiducia implicita basata su nome utente o dominio. |
+| **Filtri di sicurezza** | *Cambiato il 2026-11-25: le password vanno agli amici affidabili o a tutti col permesso temporaneo dell'host (vedi "Modello del 2026-11-25").* Si **esclude in automatico** ciò che i password manager marcano come sensibile: quei contenuti non lasciano mai il PC. |
+| **Identità** | *Superato il 2026-11-25: niente più abbinamento con codice; l'identità resta la chiave Ed25519 verificata dal canale, e gli amici si legano al suo ID.* **Abbinamento con codice**, per utente. Il codice alimenta uno **scambio di chiavi autenticato da password: CPace-ristretto255-SHA512**, implementato in C# sopra **libsodium** (vedi sotto). Niente fiducia implicita basata su nome utente o dominio. |
 | **Codice di abbinamento** | **6 cifre**, valido **2 minuti**, al massimo **3 tentativi**; poi serve un codice nuovo. |
-| **Revoca** | Un dispositivo abbinato si revoca **da qualsiasi PC dello stesso utente**. La revoca finisce in una **lista firmata, sincronizzata tra i dispositivi dell'utente**: un PC spento la riceve alla prossima connessione con un altro PC dell'utente. Una sessione attiva con il dispositivo revocato **si chiude subito**. |
+| **Revoca** | *Superato il 2026-11-25: al posto della lista di revoche ci sono patti che cadono per entrambi.* Un dispositivo abbinato si revoca **da qualsiasi PC dello stesso utente**. La revoca finisce in una **lista firmata, sincronizzata tra i dispositivi dell'utente**: un PC spento la riceve alla prossima connessione con un altro PC dell'utente. Una sessione attiva con il dispositivo revocato **si chiude subito**. |
 | **Host** | Chi invia la richiesta, anche nelle sessioni a due. Se si disconnette, la sessione **termina per tutti**. |
 | **Cronologia** | Le **ultime 20 voci**, salvate su disco **cifrate nel DB dell'host**, dove **restano anche a fine sessione**. I membri le **consultano durante la sessione**. Si salvano solo testo e immagini; i file restano riferimenti lazy al PC d'origine. |
 | **Piattaforme** | **Per ora solo Windows.** Il codice è predisposto per un porting a **Linux** senza riscritture (vedi "Predisposizione per Linux"). macOS escluso. |
@@ -87,10 +110,10 @@ Un servizio per PC nella stessa rete locale che permette di **condividere la cli
 
 Si sviluppa e si rilascia solo per Windows, ma con queste regole, così il porting a Linux sarà un'aggiunta e non una riscrittura:
 
-- **Nucleo indipendente dalla piattaforma:** protocollo, sessioni, host, CPace, cronologia, DB e UI non usano API di Windows. Nessun `#if WINDOWS` e nessun P/Invoke fuori dai progetti di piattaforma.
+- **Nucleo indipendente dalla piattaforma:** protocollo, sessioni, host, amici, cronologia, DB e UI non usano API di Windows. Nessun `#if WINDOWS` e nessun P/Invoke fuori dai progetti di piattaforma.
 - **Interfacce per tutto ciò che è nativo**, con per ora solo l'implementazione Windows:
   - monitoraggio della clipboard e scrittura, incluso il lazy (`IClipboardMonitor`, `IClipboardWriter`);
-  - riconoscimento dei contenuti marcati come sensibili dai password manager. Lo fa il monitor della clipboard, che imposta `ClipboardContent.IsMarkedSensitive`; il nucleo garantisce che quei contenuti non lascino il PC;
+  - riconoscimento dei contenuti marcati come sensibili dai password manager. Lo fa il monitor della clipboard, che imposta `ClipboardContent.IsMarkedSensitive`; il nucleo li manda solo a chi può vederli (vedi "Password" nel modello del 2026-11-25);
   - indicatore su tutti i monitor (`IOverlayIndicator`);
   - protezione della chiave del DB (`ISecretStore`: DPAPI su Windows, Secret Service su Linux);
   - percorsi dei dati (`IAppPaths`).
@@ -99,12 +122,11 @@ Si sviluppa e si rilascia solo per Windows, ma con queste regole, così il porti
 - **Test:** i test del nucleo non dipendono da Windows. In CI possono girare anche su Linux da subito, come controllo che il nucleo resti portabile.
 - **Percorsi:** si usa `Environment.SpecialFolder.LocalApplicationData` e non `%LOCALAPPDATA%` scritto a mano, così su Linux diventa da solo `~/.local/share`.
 - **Database:** SQLite cifrato con SQLite3MC, tramite `Microsoft.Data.Sqlite.Core` e `SQLite3MC.PCLRaw.bundle`. È accessibile solo all'utente che esegue CUS.
-  - **Windows:** `%LOCALAPPDATA%\CUS\cus.db`. Si usa `LocalAppData` e non `Roaming`, perché le chiavi dei dispositivi abbinati sono legate a quel PC.
+  - **Windows:** `%LOCALAPPDATA%\CUS\cus.db`. Si usa `LocalAppData` e non `Roaming`, perché identità e amici sono legati a quel PC.
   - **Linux (futuro):** `~/.local/share/CUS/cus.db`. In .NET è `Environment.SpecialFolder.LocalApplicationData`, che rispetta `XDG_DATA_HOME`. Il file va creato con permessi `0600`.
 - **Contenuto del DB:**
   - identità del dispositivo (coppia di chiavi Ed25519);
-  - dispositivi e utenti abbinati (fingerprint, data, stato di revoca);
-  - lista firmata di abbinamenti e revoche, condivisa con gli altri PC dello stesso utente;
+  - amici: patto, fiducia per le password e ultimo indirizzo noto (dal 2026-11-25, al posto di dispositivi abbinati e lista di revoche);
   - IP e nomi host inseriti a mano;
   - le ultime 20 voci della cronologia, solo sul PC che fa da host;
   - impostazioni.
@@ -130,7 +152,10 @@ Vincoli d'uso, dal README del pacchetto:
 
 Fonti: [SQLite3MC.PCLRaw.bundle su NuGet](https://www.nuget.org/packages/SQLite3MC.PCLRaw.bundle/), [README del pacchetto](https://github.com/utelle/SQLite3MultipleCiphers-NuGet), [repository SQLite3MultipleCiphers](https://github.com/utelle/SQLite3MultipleCiphers).
 
-### Valutazione di CPace (2026-11-24)
+### Valutazione di CPace (2026-11-24, rimosso il 2026-11-25)
+
+> [!note]
+> CPace, l'abbinamento con codice e la lista di revoche firmata sono stati tolti dal codice il 2026-11-25 insieme ai loro test. Questa sezione e la successiva restano come storia della decisione.
 
 CPace è uno scambio di chiavi autenticato da password di tipo bilanciato: i due PC conoscono lo stesso segreto, cioè il codice a 6 cifre. È il modello giusto per abbinare due dispositivi.
 
@@ -146,7 +171,7 @@ CPace è uno scambio di chiavi autenticato da password di tipo bilanciato: i due
 
 Fonti: [draft-irtf-cfrg-cpace su Datatracker](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/), [bozza -21](https://mirror.apps.cam.ac.uk/pub/doc/internet-drafts/draft-irtf-cfrg-cpace-21.txt), [jedisct1/cpace](https://github-redirect.dependabot.com/jedisct1/cpace), [crate Rust cpace](https://docs.rs/cpace), [filippo.io/cpace](https://pkg.go.dev/filippo.io/cpace?tab=doc), [cpace su PyPI](https://pypi.org/project/cpace/).
 
-### Lista di revoche firmata (decisa il 2026-11-24)
+### Lista di revoche firmata (decisa il 2026-11-24, rimossa il 2026-11-25)
 
 **Obiettivo:** un dispositivo compromesso non deve mai poter riottenere l'accesso, né bloccare per sempre gli altri dispositivi dell'utente.
 
@@ -183,7 +208,12 @@ Fonti: [draft-irtf-cfrg-cpace su Datatracker](https://datatracker.ietf.org/doc/d
 
 ## Questioni aperte
 
-Nessuna al 2026-11-24: tutte le domande emerse finora hanno una decisione.
+Dalla revisione di sicurezza del 2026-11-25, da decidere:
+
+- **Saluto da nascosto:** chiunque si colleghi alle porte vede identità, nome del PC e nome utente. Per evitarlo, da nascosto il PC dovrebbe presentarsi solo dopo aver riconosciuto un amico, ma serve un cambio del protocollo (chi si collega si presenta per primo).
+- **Nomi falsi in elenco:** gli annunci non sono autenticati, quindi un PC può presentarsi come "PC della reception". Chi entra vede l'impronta solo dopo. Opzioni: chiedere conferma con l'impronta prima di entrare da un non amico, e avvisare se il nome coincide con quello di un amico ma l'ID no.
+- **File ricevuti:** niente Mark-of-the-Web (SmartScreen non interviene) e nessun limite alla dimensione totale dichiarata. Opzioni: avviso sulle estensioni eseguibili e un tetto alla dimensione.
+- **Invii sotto lock:** l'host tiene `_gate` mentre invia ai membri; un membro lento blocca il resto fino a 15 s per invio.
 
 ## Note tecniche iniziali (da validare)
 
