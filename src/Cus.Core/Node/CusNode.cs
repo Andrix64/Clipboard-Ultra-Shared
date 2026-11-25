@@ -211,7 +211,7 @@ public sealed partial class CusNode : IAsyncDisposable
         {
             try
             {
-                _discovery = new Discovery(AnnouncementOrNull, _options.DiscoveryPort);
+                _discovery = new Discovery(Identity, AnnouncementOrNull, _options.DiscoveryPort);
                 _discovery.Announced += OnAnnounced;
                 _discovery.Start();
             }
@@ -517,8 +517,8 @@ public sealed partial class CusNode : IAsyncDisposable
 
     private void OnAnnounced(DiscoveryAnnouncement announcement)
     {
-        // Chiave = ID + indirizzo: un annuncio falso con l'ID di un amico non sostituisce quello vero,
-        // compare accanto (e la richiesta a quell'indirizzo fallisce la verifica d'identità).
+        // Chiave = ID + indirizzo: gli annunci sono firmati, ma uno vero rispedito da un altro indirizzo
+        // non sostituisce l'originale, compare accanto (e la richiesta lì fallisce la verifica d'identità).
         var key = $"{announcement.DeviceId}|{announcement.Host}|{announcement.Port}";
         if (announcement.Hidden)
         {

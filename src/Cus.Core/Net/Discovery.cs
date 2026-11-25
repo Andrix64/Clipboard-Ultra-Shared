@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using Cus.Core.Abstractions;
+using Cus.Core.Identity;
 
 namespace Cus.Core.Net;
 
@@ -14,8 +15,11 @@ public sealed record DiscoveryAnnouncement(string DeviceId, string DisplayName, 
 /// Scoperta dei peer con annunci UDP multicast (239.255.23.70, porta 23701). Più istanze sullo
 /// stesso PC condividono la porta grazie a SO_REUSEADDR e ricevono tutte gli annunci. Si annuncia
 /// solo chi si offre come host (come AirDrop: si è visibili solo quando lo si sceglie); tutti ascoltano.
-/// Gli annunci non sono autenticati: servono solo a trovare l'indirizzo, l'identità la verifica
-/// il canale cifrato alla connessione.
+/// Ogni annuncio (anche il congedo) è firmato con la chiave Ed25519 del dispositivo e porta un
+/// contatore crescente: chi ascolta scarta gli annunci con firma non valida, con un ID che non
+/// corrisponde alla chiave o con un contatore non più alto dell'ultimo visto da quel dispositivo.
+/// Così nessuno in rete può far sparire (o ricomparire) un host altrui, nemmeno ripetendo un suo
+/// vecchio congedo. L'identità completa la verifica comunque il canale cifrato alla connessione.
 /// </summary>
 public sealed class Discovery : IAsyncDisposable
 {
@@ -23,17 +27,26 @@ public sealed class Discovery : IAsyncDisposable
     public const int DefaultPort = 23701;
     public static readonly TimeSpan AnnounceInterval = TimeSpan.FromSeconds(5);
 
+    private const int MaxPacket = 4096;
+    private const int MaxBody = 2048;
+
     private readonly string _instanceId = Guid.NewGuid().ToString("N");
+    private readonly DeviceIdentity _identity;
     private readonly Func<AnnouncementPayload?> _payload;
+    private readonly AnnouncementFreshness _freshness = new();
+    private readonly Lock _sequenceGate = new();
+    private long _lastSequence;
     private readonly int _port;
     private readonly CancellationTokenSource _lifetime = new();
     private UdpClient? _client;
     private Task? _receiveLoop;
     private Task? _announceLoop;
 
+    /// <param name="identity">Identità con cui firmare gli annunci; l'ID annunciato è sempre il suo.</param>
     /// <param name="payload">Dati da annunciare, letti a ogni annuncio; null: niente annuncio (non visibile).</param>
-    public Discovery(Func<AnnouncementPayload?> payload, int port = DefaultPort)
+    public Discovery(DeviceIdentity identity, Func<AnnouncementPayload?> payload, int port = DefaultPort)
     {
+        _identity = identity;
         _payload = payload;
         _port = port;
     }
@@ -71,7 +84,7 @@ public sealed class Discovery : IAsyncDisposable
     {
         if (_client is null)
             return;
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload with { Instance = _instanceId, Hidden = true, DisplayName = "", UserName = "", Participants = 0 });
+        var bytes = Seal(payload with { Hidden = true, DisplayName = "", UserName = "", Participants = 0 });
         await _client.SendAsync(bytes, new IPEndPoint(Group, _port), _lifetime.Token);
     }
 
@@ -115,9 +128,49 @@ public sealed class Discovery : IAsyncDisposable
     {
         if (_client is null || _payload() is not { } current)
             return;
-        var payload = current with { Instance = _instanceId };
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload);
-        await _client.SendAsync(bytes, new IPEndPoint(Group, _port), cancellationToken);
+        await _client.SendAsync(Seal(current), new IPEndPoint(Group, _port), cancellationToken);
+    }
+
+    /// <summary>Busta firmata: ID, istanza e contatore li mette sempre questa istanza.</summary>
+    private byte[] Seal(AnnouncementPayload payload)
+    {
+        var body = JsonSerializer.SerializeToUtf8Bytes(payload with { DeviceId = _identity.DeviceId, Instance = _instanceId, Sequence = NextSequence() });
+        var signature = _identity.Sign(SignedMessage(body));
+        return JsonSerializer.SerializeToUtf8Bytes(new SignedAnnouncement(body, _identity.SignPublicKey, signature));
+    }
+
+    /// <summary>
+    /// Contatore = millisecondi Unix, ma sempre più alto del precedente: cresce anche tra un avvio e
+    /// l'altro senza doverlo salvare.
+    /// </summary>
+    private long NextSequence()
+    {
+        lock (_sequenceGate)
+        {
+            _lastSequence = Math.Max(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), _lastSequence + 1);
+            return _lastSequence;
+        }
+    }
+
+    /// <summary>Prefisso del messaggio firmato: una firma di annuncio non vale per nient'altro.</summary>
+    private static byte[] SignedMessage(ReadOnlySpan<byte> body) => [.. "CUS-discovery-v2\0"u8, .. body];
+
+    /// <summary>Annuncio verificato (firma, ID uguale alla chiave, contatore fresco), oppure null.</summary>
+    private AnnouncementPayload? Open(byte[] packet)
+    {
+        var envelope = JsonSerializer.Deserialize<SignedAnnouncement>(packet);
+        if (envelope is not { App: "CUS", Version: SignedAnnouncement.CurrentVersion, Body: { Length: > 0 and <= MaxBody } body, Key: { } key, Signature: { } signature }
+            || !DeviceIdentity.Verify(signature, SignedMessage(body), key))
+            return null;
+
+        var payload = JsonSerializer.Deserialize<AnnouncementPayload>(body);
+        if (payload is null || payload.App != "CUS" || payload.Instance == _instanceId
+            || payload.Port is < 1 or > 65535 || !IsDeviceId(payload.DeviceId)
+            || !string.Equals(payload.DeviceId, DeviceIdentity.ComputeDeviceId(key), StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        // Solo dopo la firma: un pacchetto falso non deve spostare il contatore di nessuno.
+        return _freshness.TryAccept(payload.DeviceId.ToUpperInvariant(), payload.Sequence) ? payload : null;
     }
 
     private static bool IsLocalAddress(IPAddress address) => LocalAddresses.Contains(address);
@@ -132,11 +185,7 @@ public sealed class Discovery : IAsyncDisposable
             try
             {
                 var result = await _client.ReceiveAsync(_lifetime.Token);
-                if (result.Buffer.Length > 2048)
-                    continue;
-                var payload = JsonSerializer.Deserialize<AnnouncementPayload>(result.Buffer);
-                if (payload is null || payload.App != "CUS" || payload.Instance == _instanceId
-                    || payload.Port is < 1 or > 65535 || !IsDeviceId(payload.DeviceId))
+                if (result.Buffer.Length > MaxPacket || Open(result.Buffer) is not { } payload)
                     continue;
                 // Un'istanza sullo stesso PC si raggiunge sempre in loopback (anche se ascolta solo lì).
                 var host = IsLocalAddress(result.RemoteEndPoint.Address) ? "127.0.0.1" : result.RemoteEndPoint.Address.ToString();
@@ -193,4 +242,62 @@ public sealed record AnnouncementPayload(string DeviceId, string DisplayName, st
     public string App { get; init; } = "CUS";
 
     public string Instance { get; init; } = "";
+
+    /// <summary>Contatore crescente del mittente: un annuncio vecchio ripetuto viene scartato.</summary>
+    public long Sequence { get; init; }
+}
+
+/// <summary>
+/// Busta in rete: annuncio serializzato, chiave pubblica Ed25519 del mittente e firma sull'annuncio.
+/// Le versioni precedenti, con annunci in chiaro, la scartano: non vi trovano un DeviceId.
+/// </summary>
+internal sealed record SignedAnnouncement(byte[] Body, byte[] Key, byte[] Signature)
+{
+    public const int CurrentVersion = 2;
+
+    public string App { get; init; } = "CUS";
+
+    public int Version { get; init; } = CurrentVersion;
+}
+
+/// <summary>
+/// Ultimo contatore accettato per dispositivo. Un annuncio passa solo se il suo contatore è più
+/// alto: un congedo (o un annuncio) registrato e ripetuto più tardi non ha effetto. I dispositivi
+/// non sentiti da <see cref="ForgetAfter"/> si dimenticano, e quelli ricordati sono al più <c>capacity</c>.
+/// </summary>
+internal sealed class AnnouncementFreshness(int capacity = 1024)
+{
+    public static readonly TimeSpan ForgetAfter = TimeSpan.FromMinutes(10);
+
+    private readonly Dictionary<string, (long Sequence, long SeenTicks)> _last = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+
+    /// <param name="nowTicks">Millisecondi monotoni (Environment.TickCount64); i test li impostano.</param>
+    public bool TryAccept(string deviceId, long sequence, long? nowTicks = null)
+    {
+        var now = nowTicks ?? Environment.TickCount64;
+        var forget = (long)ForgetAfter.TotalMilliseconds;
+        lock (_gate)
+        {
+            if (_last.TryGetValue(deviceId, out var last))
+            {
+                if (now - last.SeenTicks < forget && sequence <= last.Sequence)
+                    return false;
+            }
+            else if (_last.Count >= capacity)
+            {
+                foreach (var (id, entry) in _last)
+                {
+                    if (now - entry.SeenTicks >= forget)
+                        _last.Remove(id);
+                }
+
+                if (_last.Count >= capacity)
+                    return false;
+            }
+
+            _last[deviceId] = (sequence, now);
+            return true;
+        }
+    }
 }

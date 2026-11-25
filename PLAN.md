@@ -44,7 +44,7 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
   - secretstream XChaCha20-Poly1305 in ogni direzione.
 
   Motivo: è la stessa identità usata da abbinamento e revoche, senza gestire certificati, e funziona uguale su Linux. IDEA.md lo prevedeva come alternativa ("un protocollo tipo Noise").
-- **Scoperta:** annunci UDP multicast (239.255.23.70:23701) invece di mDNS/DNS-SD. Sono più semplici e permettono più istanze sullo stesso PC. Gli annunci non sono autenticati: l'identità la verifica il canale. Gli annunci dallo stesso PC vengono mappati su 127.0.0.1.
+- **Scoperta:** annunci UDP multicast (239.255.23.70:23701) invece di mDNS/DNS-SD. Sono più semplici e permettono più istanze sullo stesso PC. Gli annunci sono firmati e numerati (vedi sotto, sicurezza); l'identità completa la verifica comunque il canale. Gli annunci dallo stesso PC vengono mappati su 127.0.0.1.
 - **Ordine delle copie:**
   - le copie locali si elaborano in coda, una alla volta;
   - l'host conferma ogni copia ricevuta (`ClipboardAckMessage`), e un membro non applica copie altrui finché la propria non è confermata;
@@ -91,7 +91,7 @@ Verifiche manuali sullo stesso PC, fatte il 2026-11-24:
   - **nomi falsi:** `DisplayText.Skeleton`/`LooksAlike`, `PeerView.LooksLikeFriend` e `Fingerprint`, `JoinRequestView`/`ConsentRequest.LooksLikeFriend`; conferma prima di entrare in `MainWindow`, avviso nella finestra di consenso, notifica a chi entra;
   - **file ricevuti:** formato `ZoneIdentifier` (CFSTR_ZONEIDENTIFIER, zona Internet) in `VirtualFileDataObject`; `ClipboardFileNames.MaxTotalBytes` (1 TiB) ed `ExecutableNames`; avviso in `CusNode.WarnAboutExecutables`;
   - **invii fuori dal lock:** `MemberOutbox` per membro (64 messaggi, 32 MB), riempita sotto `_gate` da `Post` e svuotata da `PumpAsync`;
-  - resta un limite, documentato in IDEA.md: gli annunci (anche quelli di "nascosto") non sono autenticati.
+  - **annunci firmati:** `Discovery` firma ogni annuncio (busta `SignedAnnouncement`: corpo, chiave, firma Ed25519 con prefisso `CUS-discovery-v2`) e lo numera (`AnnouncementPayload.Sequence`); chi riceve verifica firma e ID = chiave, poi `AnnouncementFreshness` accetta solo contatori crescenti per dispositivo (dimentica dopo 10 minuti, al più 1024 dispositivi).
 
 ### Come provare a mano
 

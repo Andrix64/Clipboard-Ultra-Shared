@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using Cus.Core.Identity;
 using Cus.Core.Net;
 using Cus.Core.Node;
 
@@ -62,16 +66,102 @@ public sealed class DiscoveryTests : IAsyncLifetime
     {
         var port = Random.Shared.Next(45000, 50000);
         var seen = new List<DiscoveryAnnouncement>();
-        await using var discovery = new Discovery(() => new AnnouncementPayload("id", "n", "u", 1234), port);
+        var identity = DeviceIdentity.Generate("n", "u");
+        await using var discovery = new Discovery(identity, () => new AnnouncementPayload("id", "n", "u", 1234), port);
         discovery.Announced += a => { lock (seen) seen.Add(a); };
         discovery.Start();
 
-        using var udp = new System.Net.Sockets.UdpClient();
-        await udp.SendAsync("non json"u8.ToArray(), new System.Net.IPEndPoint(Discovery.Group, port));
-        await udp.SendAsync("{\"App\":\"ALTRO\",\"DeviceId\":\"x\",\"DisplayName\":\"x\",\"UserName\":\"x\",\"Port\":1}"u8.ToArray(), new System.Net.IPEndPoint(Discovery.Group, port));
+        using var udp = new UdpClient();
+        await udp.SendAsync("non json"u8.ToArray(), new IPEndPoint(Discovery.Group, port));
+        await udp.SendAsync("{\"App\":\"ALTRO\",\"DeviceId\":\"x\",\"DisplayName\":\"x\",\"UserName\":\"x\",\"Port\":1}"u8.ToArray(), new IPEndPoint(Discovery.Group, port));
+        // Annuncio in chiaro (formato senza firma) con un ID valido: scartato.
+        await udp.SendAsync(Encoding.UTF8.GetBytes($"{{\"App\":\"CUS\",\"DeviceId\":\"{new string('A', 32)}\",\"DisplayName\":\"x\",\"UserName\":\"x\",\"Port\":1}}"), new IPEndPoint(Discovery.Group, port));
         await Task.Delay(500);
 
         lock (seen)
             Assert.Empty(seen); // anche il proprio annuncio è escluso
+    }
+
+    [Fact]
+    public async Task ForgedHiddenAnnouncement_DoesNotRemoveTheHost()
+    {
+        var port = Random.Shared.Next(50000, 52500);
+        var options = TestNode.DefaultOptions() with { EnableDiscovery = true, DiscoveryPort = port };
+        var host = await TestNode.StartAsync(_root.Path, "host", options);
+        var viewer = await TestNode.StartAsync(_root.Path, "viewer", options);
+        _nodes.AddRange([host, viewer]);
+
+        await host.ShowAsync();
+        await Eventually.TrueAsync(() => viewer.Node.Peers.Any(p => p.DeviceId == host.Node.Identity.DeviceId), "viewer vede host", timeoutMs: 15000);
+
+        // Un attaccante manda congedi a nome dell'host: in chiaro, e firmati con la propria chiave.
+        using var udp = new UdpClient();
+        var hostId = host.Node.Identity.DeviceId;
+        await udp.SendAsync(Encoding.UTF8.GetBytes(
+            $"{{\"App\":\"CUS\",\"DeviceId\":\"{hostId}\",\"DisplayName\":\"\",\"UserName\":\"\",\"Port\":{host.Node.Port},\"Participants\":0,\"Hidden\":true}}"),
+            new IPEndPoint(Discovery.Group, port));
+        await using (var forger = new Discovery(DeviceIdentity.Generate("x", "x"), () => null, port))
+        {
+            forger.Start();
+            await forger.AnnounceHiddenAsync(new AnnouncementPayload(hostId, "", "", host.Node.Port));
+        }
+
+        // Più a lungo dell'intervallo tra due annunci no: basta che non sparisca mai nel frattempo.
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.Contains(viewer.Node.Peers, p => p.DeviceId == hostId && p.IsAnnounced);
+            await Task.Delay(100);
+        }
+    }
+
+    [Fact]
+    public async Task ReplayedHiddenAnnouncement_DoesNotRemoveTheHost()
+    {
+        var port = Random.Shared.Next(52500, 55000);
+        var options = TestNode.DefaultOptions() with { EnableDiscovery = true, DiscoveryPort = port };
+        var host = await TestNode.StartAsync(_root.Path, "host", options);
+        var viewer = await TestNode.StartAsync(_root.Path, "viewer", options);
+        _nodes.AddRange([host, viewer]);
+        var hostId = host.Node.Identity.DeviceId;
+
+        // L'attaccante registra tutto ciò che passa sul gruppo multicast.
+        using var sniffer = new UdpClient(AddressFamily.InterNetwork);
+        sniffer.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        sniffer.Client.Bind(new IPEndPoint(IPAddress.Any, port));
+        sniffer.JoinMulticastGroup(Discovery.Group);
+        var captured = new System.Collections.Concurrent.ConcurrentQueue<byte[]>();
+        using var stop = new CancellationTokenSource();
+        var sniffing = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                    captured.Enqueue((await sniffer.ReceiveAsync(stop.Token)).Buffer);
+            }
+            catch (OperationCanceledException) { }
+        });
+
+        await host.ShowAsync();
+        await Eventually.TrueAsync(() => viewer.Node.Peers.Any(p => p.DeviceId == hostId), "viewer vede host", timeoutMs: 15000);
+        await host.Node.SetVisibleAsync(false);
+        await Eventually.TrueAsync(() => !viewer.Node.Peers.Any(p => p.DeviceId == hostId), "il congedo vero funziona", timeoutMs: 3000);
+        await Task.Delay(200);
+        var recorded = captured.Where(p => Encoding.UTF8.GetString(p).Contains("\"Body\"")).ToArray();
+        Assert.NotEmpty(recorded);
+
+        await host.ShowAsync();
+        await Eventually.TrueAsync(() => viewer.Node.Peers.Any(p => p.DeviceId == hostId), "host di nuovo visibile", timeoutMs: 15000);
+
+        // Ripete tutti i pacchetti registrati prima (congedo compreso): nessun effetto.
+        await stop.CancelAsync();
+        await sniffing;
+        using var udp = new UdpClient();
+        foreach (var packet in recorded)
+            await udp.SendAsync(packet, new IPEndPoint(Discovery.Group, port));
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.Contains(viewer.Node.Peers, p => p.DeviceId == hostId && p.IsAnnounced);
+            await Task.Delay(100);
+        }
     }
 }
