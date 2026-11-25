@@ -150,18 +150,59 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             VerticalAlignment = VerticalAlignment.Center,
         };
         Skin.SetRich(title, $"{Icons.Clipboard} CLIPBOARD CONDIVISA");
-        header.Children.Add(title);
 
-        var content = Skin.Chassis(new StackPanel
+        // Spia rossa che pulsa, come sulla finestra principale: la condivisione è attiva.
+        var lamp = new Lamp
+        {
+            Width = 16,
+            Height = 16,
+            Color = Color.Parse("#FF3B2B"),
+            Pulse = true,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        header.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { lamp, title },
+        });
+
+        // Vetro del monitor CRT sopra il display: righe di scansione, bordi scuri e riflesso.
+        var screen = new Grid
+        {
+            Children =
+            {
+                CurrentPanel(state.Current, state.Participants),
+                new CrtOverlay { Margin = new Thickness(-10, -6), CornerRadius = 8, Strength = 0.8 },
+            },
+        };
+
+        var body = new StackPanel
         {
             Width = Width,
             Spacing = 6,
+            Margin = new Thickness(14, 2, 14, 2),
             Children =
             {
                 header,
-                Skin.Lcd(CurrentPanel(state.Current, state.Participants)),
+                Skin.Lcd(screen),
                 Participants(state.Participants),
                 Skin.Engraved("doppio clic per uscire dalla sessione"),
+            },
+        };
+
+        // Scocca come la finestra principale: metallo spazzolato con graffi e viti, e due colonne di LED
+        // ai lati del display.
+        var content = Skin.Chassis(new Panel
+        {
+            Children =
+            {
+                new ChassisDecor { Margin = new Thickness(-8), Screws = ScrewSide.Both, Seed = 5, CornerRadius = 10 },
+                body,
+                new LedStrip { HorizontalAlignment = HorizontalAlignment.Left, Width = 8, VerticalAlignment = VerticalAlignment.Stretch, Margin = new Thickness(0, 34, 0, 34) },
+                new LedStrip { HorizontalAlignment = HorizontalAlignment.Right, Width = 8, VerticalAlignment = VerticalAlignment.Stretch, Margin = new Thickness(0, 34, 0, 34) },
             },
         }, cornerRadius: 12);
         content.Cursor = new Cursor(StandardCursorType.Hand);
@@ -187,7 +228,9 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             return Skin.LcdText("nessuna copia ancora", 13);
 
         var self = participants.FirstOrDefault(p => p.IsSelf);
-        var origin = DisplayText.Sanitize(current.OriginName, 64) + (self is not null && current.OriginDeviceId == self.DeviceId ? " (tu)" : "");
+        // Il nome di chi ha copiato è quello di oggi (se ha cambiato nome dopo la copia), non quello di allora.
+        var originName = participants.FirstOrDefault(p => p.DeviceId == current.OriginDeviceId)?.DisplayName ?? current.OriginName;
+        var origin = DisplayText.Sanitize(originName, 64) + (self is not null && current.OriginDeviceId == self.DeviceId ? " (tu)" : "");
         var size = current.SizeBytes is { } bytes ? DisplayText.FormatSize(bytes) : "—";
         var title = DisplayText.Sanitize(current.Title, 260, "");
         if (current.Kind == ClipboardContentKind.Files && !current.IsSensitive)
