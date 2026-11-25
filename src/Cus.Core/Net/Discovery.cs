@@ -60,9 +60,12 @@ public sealed class Discovery : IAsyncDisposable
         {
             client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             client.Client.Bind(new IPEndPoint(IPAddress.Any, _port));
-            client.JoinMulticastGroup(Group);
             client.MulticastLoopback = true;
             client.Ttl = 1;
+            // Su ogni scheda, non solo su quella che Windows sceglie di default: con una VPN attiva
+            // (metrica più bassa) gli annunci altrimenti partirebbero e arriverebbero solo da lì.
+            if (JoinOnAllInterfaces(client).Count == 0)
+                client.JoinMulticastGroup(Group);
         }
         catch
         {
@@ -85,7 +88,100 @@ public sealed class Discovery : IAsyncDisposable
         if (_client is null)
             return;
         var bytes = Seal(payload with { Hidden = true, DisplayName = "", UserName = "", Participants = 0 });
-        await _client.SendAsync(bytes, new IPEndPoint(Group, _port), _lifetime.Token);
+        await SendToAllInterfacesAsync(_client, bytes, _lifetime.Token);
+    }
+
+    private readonly HashSet<IPAddress> _joined = [];
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+
+    /// <summary>Indirizzi IPv4 delle schede attive che supportano il multicast (senza loopback).</summary>
+    private static List<IPAddress> MulticastInterfaces()
+    {
+        var result = new List<IPAddress>();
+        try
+        {
+            foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up
+                    || !nic.SupportsMulticast
+                    || nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                    continue;
+                foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+                {
+                    if (unicast.Address.AddressFamily == AddressFamily.InterNetwork)
+                        result.Add(unicast.Address);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is System.Net.NetworkInformation.NetworkInformationException or SocketException)
+        {
+            // Nessuna scheda leggibile: si userà l'interfaccia predefinita.
+        }
+
+        return result;
+    }
+
+    /// <summary>Si iscrive al gruppo su ogni scheda non ancora iscritta (anche quelle comparse dopo l'avvio).</summary>
+    private HashSet<IPAddress> JoinOnAllInterfaces(UdpClient client)
+    {
+        lock (_joined)
+        {
+            foreach (var address in MulticastInterfaces())
+            {
+                if (_joined.Contains(address))
+                    continue;
+                try
+                {
+                    client.JoinMulticastGroup(Group, address);
+                    _joined.Add(address);
+                }
+                catch (SocketException)
+                {
+                    // Scheda che non accetta l'iscrizione (adattatore virtuale): si passa alla successiva.
+                }
+            }
+
+            return [.. _joined];
+        }
+    }
+
+    /// <summary>Invia lo stesso pacchetto da ogni scheda: quella giusta per la LAN non è necessariamente la predefinita.</summary>
+    private async Task SendToAllInterfacesAsync(UdpClient client, byte[] bytes, CancellationToken cancellationToken)
+    {
+        var target = new IPEndPoint(Group, _port);
+        var interfaces = JoinOnAllInterfaces(client);
+        await _sendGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (interfaces.Count == 0)
+            {
+                await client.SendAsync(bytes, target, cancellationToken);
+                return;
+            }
+
+            SocketException? last = null;
+            var sent = false;
+            foreach (var address in interfaces)
+            {
+                try
+                {
+                    client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
+                    await client.SendAsync(bytes, target, cancellationToken);
+                    sent = true;
+                }
+                catch (SocketException ex)
+                {
+                    last = ex;
+                }
+            }
+
+            if (!sent && last is not null)
+                throw last;
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -128,7 +224,7 @@ public sealed class Discovery : IAsyncDisposable
     {
         if (_client is null || _payload() is not { } current)
             return;
-        await _client.SendAsync(Seal(current), new IPEndPoint(Group, _port), cancellationToken);
+        await SendToAllInterfacesAsync(_client, Seal(current), cancellationToken);
     }
 
     /// <summary>Busta firmata: ID, istanza e contatore li mette sempre questa istanza.</summary>
