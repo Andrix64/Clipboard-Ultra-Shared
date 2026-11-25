@@ -35,7 +35,8 @@
     <Setter Property="BorderBrush" Value="#0C1505" />
     <Setter Property="BorderThickness" Value="2" />
     <Setter Property="CornerRadius" Value="10" />
-    <Setter Property="BoxShadow" Value="inset 0 2 8 0 #77000000" />
+    <!-- Cornice nera dello schermo, con un filo di luce sul bordo esterno -->
+    <Setter Property="BoxShadow" Value="inset 0 2 8 0 #77000000, 0 0 0 3 #0A0B0D, 0 1 0 4 #6A7078" />
   </Style>
 
   <Style Selector="Border.lcd-dark">
@@ -43,7 +44,33 @@
     <Setter Property="BorderBrush" Value="#0C1505" />
     <Setter Property="BorderThickness" Value="2" />
     <Setter Property="CornerRadius" Value="8" />
-    <Setter Property="BoxShadow" Value="inset 0 2 6 0 #99000000" />
+    <Setter Property="BoxShadow" Value="inset 0 2 6 0 #99000000, 0 0 0 3 #0A0B0D, 0 1 0 4 #5A6068" />
+  </Style>
+
+  <!-- Etichetta di carta incollata sul telaio -->
+  <Style Selector="Border.sticker">
+    <Setter Property="Background" Value="#D8D2BC" />
+    <Setter Property="BorderBrush" Value="#8C8668" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="Padding" Value="6,2" />
+    <Setter Property="RenderTransform" Value="rotate(-2deg)" />
+    <Setter Property="BoxShadow" Value="0 1 2 0 #99000000" />
+  </Style>
+  <Style Selector="Border.sticker > TextBlock">
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="FontSize" Value="9" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="Foreground" Value="#2A2A22" />
+  </Style>
+
+  <!-- Numero di serie stampato in rosso -->
+  <Style Selector="TextBlock.serial">
+    <Setter Property="FontFamily" Value="{x:Static ui:Skin.LcdFont}" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="FontWeight" Value="Bold" />
+    <Setter Property="LetterSpacing" Value="1" />
+    <Setter Property="Foreground" Value="#C93A2A" />
   </Style>
 
   <!-- Pulsanti tondi lucidi -->
