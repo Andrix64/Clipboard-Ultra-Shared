@@ -13,7 +13,7 @@
   <Grid Margin="14">
 
     <!-- Pannello sinistro: cronologia e impostazioni -->
-    <Border x:Name="LeftSide" Classes="chassis" CornerRadius="12" Width="430" Height="372"
+    <Border x:Name="LeftSide" Classes="chassis" CornerRadius="5" Width="430" Height="372"
             HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,30,0,0" Padding="12,12,22,12">
       <Panel>
       <ui:ChassisDecor Margin="-12,-12,-22,-12" Screws="Left" Seed="1" />
@@ -58,6 +58,12 @@
               <StackPanel Spacing="10" Margin="0,0,6,0">
                 <TextBlock Classes="engraved" Text="QUESTO PC" />
                 <TextBlock x:Name="IdentityText" Classes="lcd-dark" TextWrapping="Wrap" />
+                <TextBlock Classes="lcd-dark" FontSize="11" TextWrapping="Wrap"
+                           Text="NOME VISIBILE AGLI ALTRI (all'inizio è il nome del PC)" />
+                <DockPanel>
+                  <Button x:Name="RenameButton" DockPanel.Dock="Right" Classes="pill" Content="SALVA" Margin="6,0,0,0" />
+                  <TextBox x:Name="NameInput" Classes="lcd" MaxLength="64" />
+                </DockPanel>
                 <TextBlock Classes="engraved" Text="ESECUZIONE" />
                 <DockPanel>
                   <Button x:Name="BackgroundToggle" DockPanel.Dock="Right" Classes="pill page" Content="SÌ" MinWidth="54" Margin="8,0,0,0" />
@@ -93,7 +99,7 @@
     </Border>
 
     <!-- Pannello destro: rete o sessione, e amici -->
-    <Border x:Name="RightSide" Classes="chassis" CornerRadius="12" Width="430" Height="372"
+    <Border x:Name="RightSide" Classes="chassis" CornerRadius="5" Width="430" Height="372"
             HorizontalAlignment="Left" VerticalAlignment="Top" Margin="810,30,0,0" Padding="22,12,12,12">
       <Panel>
       <ui:ChassisDecor Margin="-22,-12,-12,-12" Screws="Right" Seed="2" />
@@ -170,7 +176,7 @@
     <Border x:Name="Deck" Classes="chassis" Width="404" Height="420" HorizontalAlignment="Left" VerticalAlignment="Top"
             Margin="418,0,0,0" Padding="16,12,16,16">
       <Panel>
-      <ui:ChassisDecor Margin="-16,-12,-16,-16" Screws="Both" Seed="3" CornerRadius="18" />
+      <ui:ChassisDecor Margin="-16,-12,-16,-16" Screws="Both" Seed="3" CornerRadius="6" />
       <DockPanel>
         <DockPanel x:Name="DragBar" DockPanel.Dock="Top" Background="Transparent" Height="28">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
@@ -198,7 +204,7 @@
               <TextBlock x:Name="LcdCurrent" Classes="lcd" FontSize="12" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
             </DockPanel>
             <TextBlock x:Name="LcdLast" Grid.Row="4" Classes="lcd" FontSize="11" TextTrimming="CharacterEllipsis" />
-            <ui:CrtOverlay Grid.RowSpan="5" Margin="-14,-10" Radar="True" CornerRadius="8" Strength="0.8" />
+            <ui:CrtOverlay x:Name="LcdRadar" Grid.RowSpan="5" Margin="-14,-10" Radar="True" CornerRadius="8" Strength="0.8" />
           </Grid>
         </Border>
 

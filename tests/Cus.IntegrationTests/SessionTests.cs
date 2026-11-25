@@ -46,6 +46,28 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Rename_IsSeenByTheOthersInTheSession_AndByTheHost()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 2, "andrea vede luca");
+
+        // Un membro cambia nome: lo vede l'host.
+        Assert.Equal("Luca Rossi", await luca.Node.SetDisplayNameAsync("  Luca   Rossi "));
+        await Eventually.TrueAsync(() => andrea.Node.Session!.Participants.Any(p => p.DisplayName == "Luca Rossi"), "l'host vede il nuovo nome");
+        await Eventually.TrueAsync(() => luca.Node.Session!.Participants.Any(p => p.IsSelf && p.DisplayName == "Luca Rossi"), "il membro vede il proprio nome");
+
+        // L'host cambia nome: lo vede il membro.
+        await andrea.Node.SetDisplayNameAsync("Andrea Host");
+        await Eventually.TrueAsync(() => luca.Node.Session!.Participants.Any(p => p.IsHost && p.DisplayName == "Andrea Host"), "il membro vede il nuovo nome dell'host");
+
+        // Un nome vuoto non cambia nulla.
+        Assert.Null(await luca.Node.SetDisplayNameAsync("   "));
+        Assert.Equal("Luca Rossi", luca.Node.Identity.DisplayName);
+    }
+
+    [Fact]
     public async Task Rejected_StartsNoSessionForTheRequester()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));

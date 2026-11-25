@@ -102,7 +102,52 @@ public sealed partial class CusNode : IAsyncDisposable
         _overlay.DirectionToggleRequested += (_, _) => RunInBackground(ToggleMyDirectionAsync);
     }
 
-    public DeviceIdentity Identity { get; }
+    public DeviceIdentity Identity { get; private set; }
+
+    /// <summary>Il nome visibile di questo PC è cambiato.</summary>
+    public event EventHandler? IdentityChanged;
+
+    /// <summary>
+    /// Cambia il nome con cui questo PC si mostra: lo salva, lo annuncia in rete e, se si è in una
+    /// sessione, lo comunica all'host (che lo ripropone a tutti). Le chiavi restano le stesse.
+    /// </summary>
+    /// <returns>Il nome effettivo dopo la pulizia, oppure null se vuoto.</returns>
+    public async Task<string?> SetDisplayNameAsync(string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested))
+            return null;
+        var name = DisplayText.Sanitize(requested, 64);
+        if (name == Identity.DisplayName)
+            return name;
+
+        MemberSession? member;
+        bool host;
+        await _gate.WaitAsync();
+        try
+        {
+            Identity = Identity.WithDisplayName(name);
+            _database.SaveIdentity(Identity);
+            member = _memberSession;
+            host = _hostSession is not null;
+            RaiseSessionChanged();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        IdentityChanged?.Invoke(this, EventArgs.Empty);
+        AnnounceSoon();
+        if (host)
+            await BroadcastStateAsync();
+        else if (member is not null)
+        {
+            try { await member.Host.SendAsync(new RenameMessage(name)); }
+            catch (IOException) { /* host caduto: la sessione si chiude altrove */ }
+        }
+
+        return name;
+    }
 
     /// <summary>Patti reciproci e fiducia per i contenuti sensibili.</summary>
     public FriendStore Friends { get; }

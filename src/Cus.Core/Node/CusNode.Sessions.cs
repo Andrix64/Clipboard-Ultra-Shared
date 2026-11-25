@@ -486,6 +486,24 @@ public sealed partial class CusNode
                     ? $"{connection.Remote.DisplayName} è passato in sola lettura."
                     : $"{connection.Remote.DisplayName} è tornato bidirezionale.");
                 break;
+            case RenameMessage rename:
+                var newName = DisplayText.Sanitize(rename.DisplayName, 64);
+                await _gate.WaitAsync();
+                try
+                {
+                    if (CurrentMember(connection) is not { } renamed || renamed.DisplayName == newName)
+                        return;
+                    renamed.DisplayName = newName;
+                    RaiseSessionChanged();
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                await BroadcastStateAsync();
+                Log($"{connection.Remote.DisplayName} ora si chiama {newName}.");
+                break;
             case LeaveSessionMessage:
                 connection.Close("uscito dalla sessione");
                 break;
@@ -1337,7 +1355,7 @@ public sealed partial class CusNode
             new ParticipantDto(self.DeviceId, self.DisplayName, ShareDirection.Bidirectional, IsHost: true),
             .. Members.Values
                 .OrderBy(m => m.JoinedUtc)
-                .Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.Connection.Remote.DisplayName, m.Direction, IsHost: false, m.Granted)),
+                .Select(m => new ParticipantDto(m.Connection.Remote.DeviceId, m.DisplayName ?? m.Connection.Remote.DisplayName, m.Direction, IsHost: false, m.Granted)),
         ];
 
         public SessionView ToView(DeviceIdentity self, bool visible) => new(
@@ -1359,6 +1377,9 @@ public sealed partial class CusNode
         public MemberOutbox Outbox { get; } = new();
 
         public DateTimeOffset JoinedUtc { get; } = DateTimeOffset.UtcNow;
+
+        /// <summary>Nome cambiato dal membro dopo essere entrato (null: quello dell'handshake).</summary>
+        public string? DisplayName { get; set; }
 
         /// <summary>Modalità concessa dall'host.</summary>
         public ShareDirection Granted { get; set; } = granted;

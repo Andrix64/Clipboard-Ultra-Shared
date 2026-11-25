@@ -17,6 +17,7 @@ namespace Cus.Core.Net;
 [JsonDerivedType(typeof(JoinReplyMessage), "join-reply")]
 [JsonDerivedType(typeof(SessionStateMessage), "session-state")]
 [JsonDerivedType(typeof(SetDirectionMessage), "set-direction")]
+[JsonDerivedType(typeof(RenameMessage), "rename")]
 [JsonDerivedType(typeof(ClipboardPushMessage), "clipboard-push")]
 [JsonDerivedType(typeof(ClipboardItemMessage), "clipboard-item")]
 [JsonDerivedType(typeof(ClipboardAckMessage), "clipboard-ack")]
@@ -96,6 +97,9 @@ public sealed record SessionStateMessage(string SessionId, IReadOnlyList<Partici
 
 /// <summary>Membro → host: la modalità che il membro sceglie per sé (mai oltre quella concessa).</summary>
 public sealed record SetDirectionMessage(ShareDirection Direction) : CusMessage;
+
+/// <summary>Membro → host: il membro ha cambiato il proprio nome visibile; l'host lo ripropone a tutti.</summary>
+public sealed record RenameMessage(string DisplayName) : CusMessage;
 
 /// <summary>Membro → host: copia fatta sul PC del membro.</summary>
 /// <param name="Sensitive">Contenuto marcato sensibile da un password manager.</param>

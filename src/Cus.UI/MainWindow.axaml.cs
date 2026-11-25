@@ -91,9 +91,16 @@ public partial class MainWindow : Window
         if (model.Notifier is { } notifier)
             notifier.Notified += (message, isError) => AddActivity((isError ? "! " : "") + message);
 
-        Skin.SetRich(LcdDevice, $"{Icons.Desktop} {node.Identity.DisplayName}");
+        void ShowIdentity()
+        {
+            Skin.SetRich(LcdDevice, $"{Icons.Desktop} {node.Identity.DisplayName}");
+            IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA {node.Identity.Info.Fingerprint}";
+        }
+
+        ShowIdentity();
+        NameInput.Text = node.Identity.DisplayName;
+        node.IdentityChanged += (_, _) => Post(ShowIdentity);
         LcdPort.Text = $"PORTA {node.Port}";
-        IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA {node.Identity.Info.Fingerprint}";
 
         WireNetworkPage(node);
         WireSessionPage(node);
@@ -273,12 +280,44 @@ public partial class MainWindow : Window
             _model.Notifier?.Info($"{result.PeerName} non ti ha fatto entrare" + (result.Reason is null ? "." : $": {result.Reason}."));
     }
 
+    private string _radarSignature = "";
+
+    /// <summary>Radar: un pallino per ogni host visto in rete e uno, con la propria iniziale, per ogni persona collegata.</summary>
+    private void RefreshRadar(CusNode node, IReadOnlyList<PeerView> peers)
+    {
+        var blips = new List<RadarBlip>();
+        var seen = new HashSet<string>();
+        if (node.Session is { } session)
+        {
+            foreach (var p in session.Participants.Where(p => !p.IsSelf))
+                if (seen.Add(p.DeviceId))
+                    blips.Add(new RadarBlip(p.DeviceId, Initial(p.DisplayName), Connected: true));
+        }
+
+        foreach (var peer in peers.Where(p => p.IsAnnounced))
+            if (seen.Add(peer.DeviceId ?? peer.Address))
+                blips.Add(new RadarBlip(peer.DeviceId ?? peer.Address, "", Connected: false));
+
+        var signature = string.Join("|", blips.Select(b => $"{b.Key}:{b.Label}:{b.Connected}"));
+        if (signature == _radarSignature)
+            return;
+        _radarSignature = signature;
+        LcdRadar.Blips = blips;
+    }
+
+    private static string Initial(string name)
+    {
+        var trimmed = name.Trim();
+        return trimmed.Length == 0 ? "?" : char.ToUpperInvariant(trimmed[0]).ToString();
+    }
+
     private void RefreshPeers()
     {
         if (_model.Node is not { } node)
             return;
         var peers = node.Peers;
-        var signature = string.Join("\n", peers.Select(p => $"{p.DeviceId}|{p.DisplayName}|{p.Address}|{p.Participants}|{p.IsAnnounced}|{p.Agreement}|{p.IsManual}|{p.LooksLikeFriend}"));
+        RefreshRadar(node, peers);
+        var signature =string.Join("\n", peers.Select(p => $"{p.DeviceId}|{p.DisplayName}|{p.Address}|{p.Participants}|{p.IsAnnounced}|{p.Agreement}|{p.IsManual}|{p.LooksLikeFriend}"));
         if (signature == _peersSignature)
             return;
         _peersSignature = signature;
@@ -366,6 +405,7 @@ public partial class MainWindow : Window
                 : session.IsVisible ? "In attesa che qualcuno chieda di entrare..." : "Nessun altro nella sessione");
         }
 
+        RefreshRadar(node, node.Peers);
         var host = session?.Role == SessionRole.Host;
         PageNetworkButton.Content = session is null ? "RETE" : "SESSIONE";
         VisibleToggle.IsVisible = host;
@@ -653,6 +693,20 @@ public partial class MainWindow : Window
         };
         BackgroundToggle.IsEnabled = _model.HasTrayIcon;
         Update();
+
+        async Task SaveName()
+        {
+            var applied = await node.SetDisplayNameAsync(NameInput.Text);
+            // Vuoto: si torna al nome attuale; altrimenti si mostra quello ripulito.
+            NameInput.Text = applied ?? node.Identity.DisplayName;
+        }
+
+        RenameButton.Click += async (_, _) => await RunFrom(RenameButton, SaveName);
+        NameInput.KeyDown += async (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+                await RunFrom(RenameButton, SaveName);
+        };
     }
 
     // ================================================================ simulazione

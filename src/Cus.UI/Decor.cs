@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -90,6 +91,9 @@ public abstract class FxControl : Control
     }
 }
 
+/// <summary>Un pallino del radar. <paramref name="Key"/> è l'identità (ID dispositivo): decide dove sta.</summary>
+public sealed record RadarBlip(string Key, string Label, bool Connected);
+
 /// <summary>
 /// Vetro del monitor CRT da mettere sopra un display: linee di scansione, bordi scuri, riflesso
 /// curvo e, se richiesto, ventaglio radar con linea di scansione e banda di aggiornamento.
@@ -106,11 +110,17 @@ public sealed class CrtOverlay : FxControl
     public static readonly StyledProperty<double> StrengthProperty =
         AvaloniaProperty.Register<CrtOverlay, double>(nameof(Strength), 1);
 
+    /// <summary>Pallini del radar: uno per ogni dispositivo visto in rete o collegato.</summary>
+    public static readonly StyledProperty<IReadOnlyList<RadarBlip>?> BlipsProperty =
+        AvaloniaProperty.Register<CrtOverlay, IReadOnlyList<RadarBlip>?>(nameof(Blips));
+
     static CrtOverlay()
     {
-        AffectsRender<CrtOverlay>(RadarProperty, CornerRadiusProperty, StrengthProperty);
+        AffectsRender<CrtOverlay>(RadarProperty, CornerRadiusProperty, StrengthProperty, BlipsProperty);
         RadarProperty.Changed.AddClassHandler<CrtOverlay>((o, _) => o.SyncClock());
     }
+
+    public IReadOnlyList<RadarBlip>? Blips { get => GetValue(BlipsProperty); set => SetValue(BlipsProperty, value); }
 
     public bool Radar { get => GetValue(RadarProperty); set => SetValue(RadarProperty, value); }
 
@@ -168,7 +178,7 @@ public sealed class CrtOverlay : FxControl
         var t = FxClock.Seconds;
 
         if (Radar)
-            DrawRadar(context, w, h, t);
+            DrawRadar(context, w, h, t, Blips);
 
         // Linee di scansione: una riga scura ogni tre pixel.
         var alpha = (byte)Math.Clamp(34 * Strength, 0, 255);
@@ -208,7 +218,7 @@ public sealed class CrtOverlay : FxControl
     }
 
     /// <summary>Ventaglio radar in basso a destra (sullo schermo di riferimento: archi tratteggiati, linea piena esterna, lancetta).</summary>
-    private static void DrawRadar(DrawingContext context, double w, double h, double t)
+    private static void DrawRadar(DrawingContext context, double w, double h, double t, IReadOnlyList<RadarBlip>? blips)
     {
         var origin = new Point(w * 0.8, h + 10);
         const double from = -140, to = -40;
@@ -245,10 +255,68 @@ public sealed class CrtOverlay : FxControl
         context.DrawGeometry(new SolidColorBrush(Color.FromArgb(26, 17, 36, 10)), null, wedge);
         context.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(95, 17, 36, 10)), 1.5), origin, OnArc(origin, h * 1.02, sweep));
 
-        // Un puntino che pulsa dentro il ventaglio.
-        var blip = OnArc(origin, h * 0.62, -76);
-        var glow = 0.35 + 0.65 * (0.5 + 0.5 * Math.Sin(t * 2.4));
-        context.DrawEllipse(new SolidColorBrush(Color.FromArgb((byte)(130 * glow), 17, 36, 10)), null, blip, 2.6, 2.6);
+        if (blips is null || blips.Count == 0)
+            return;
+
+        // Un pallino per dispositivo. La posizione deriva dall'identità: lo stesso dispositivo sta sempre
+        // nello stesso punto e due dispositivi non finiscono mai uno sull'altro. Il pallino si accende
+        // quando la lancetta lo ha appena superato e poi svanisce, come su un radar vero.
+        var placed = new List<Point>();
+        foreach (var blip in blips.OrderBy(b => b.Connected))
+        {
+            var spot = Place(origin, h, from, to, blip.Key, placed, out var angle);
+            placed.Add(spot);
+
+            var behind = (sweep - angle) * dir;
+            var flash = behind >= 0 ? Math.Exp(-behind / 28) : 0;
+            var glow = 0.4 + 0.6 * flash;
+            IBrush Ink(double a) => new SolidColorBrush(Color.FromArgb((byte)Math.Clamp(a, 0, 255), 17, 36, 10));
+
+            if (!blip.Connected)
+            {
+                context.DrawEllipse(Ink(130 * glow), null, spot, 2.6, 2.6);
+                continue;
+            }
+
+            // Collegato: disco pieno con anello e l'iniziale del nome accanto, così si distingue dagli altri.
+            context.DrawEllipse(Ink(30 + 40 * flash), new Pen(Ink(190), 1.2), spot, 7, 7);
+            context.DrawEllipse(Ink(235), null, spot, 3.6, 3.6);
+            if (blip.Label.Length == 0)
+                continue;
+            var text = new FormattedText(blip.Label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold), 10, Ink(215));
+            context.DrawText(text, new Point(spot.X + 9, spot.Y - text.Height / 2));
+        }
+    }
+
+    /// <summary>Punto stabile nel ventaglio per una chiave, spostato se cade troppo vicino a uno già piazzato.</summary>
+    private static Point Place(Point origin, double h, double from, double to, string key, List<Point> placed, out double angle)
+    {
+        var hash = Fnv(key);
+        var a = 0.08 + 0.84 * ((hash & 0xFFFF) / 65535.0);
+        var r = 0.30 + 0.62 * (((hash >> 16) & 0xFFFF) / 65535.0);
+        var point = default(Point);
+        for (var attempt = 0; attempt < 12; attempt++)
+        {
+            angle = from + (to - from) * a;
+            point = OnArc(origin, h * r, angle);
+            if (placed.All(p => Math.Abs(p.X - point.X) > 16 || Math.Abs(p.Y - point.Y) > 16))
+                return point;
+            r = 0.30 + (r - 0.30 + 0.17) % 0.62;
+            a = 0.08 + (a - 0.08 + 0.11) % 0.84;
+        }
+
+        angle = from + (to - from) * a;
+        return OnArc(origin, h * r, angle);
+    }
+
+    /// <summary>Hash stabile (string.GetHashCode cambia a ogni avvio).</summary>
+    private static uint Fnv(string key)
+    {
+        var hash = 2166136261u;
+        foreach (var c in key)
+            hash = (hash ^ c) * 16777619u;
+        return hash;
     }
 
     private static StreamGeometry Arc(Point origin, double radius, double from, double to)
@@ -278,7 +346,7 @@ public sealed class ChassisDecor : Control
         AvaloniaProperty.Register<ChassisDecor, ScrewSide>(nameof(Screws), ScrewSide.Both);
 
     public static readonly StyledProperty<double> CornerRadiusProperty =
-        AvaloniaProperty.Register<ChassisDecor, double>(nameof(CornerRadius), 12);
+        AvaloniaProperty.Register<ChassisDecor, double>(nameof(CornerRadius), 5);
 
     public static readonly StyledProperty<int> SeedProperty =
         AvaloniaProperty.Register<ChassisDecor, int>(nameof(Seed), 1);
