@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         node.CurrentClipboardChanged += (_, _) => Post(RefreshCurrent);
         node.TransfersChanged += (_, _) => Post(RefreshTransfersButton);
         node.TransfersRequested += (_, _) => Post(() => TransfersWindow.ShowFor(node));
+        node.IncomingTransfersRequested += (_, _) => Post(() => TransfersWindow.ShowFor(node, incoming: true));
         node.Friends.Changed += (_, _) => Post(() =>
         {
             RefreshFriends();

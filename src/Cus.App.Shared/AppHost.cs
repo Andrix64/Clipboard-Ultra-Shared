@@ -136,6 +136,7 @@ public static class AppHost
         IClipboardMonitor monitor;
         IClipboardWriter writer;
         IOverlayIndicator overlay;
+        AvaloniaOverlayIndicator? realOverlay = null;
         ISimulationControls? simulation = null;
         if (options.ClipboardMode == ClipboardMode.Simulated)
         {
@@ -158,7 +159,7 @@ public static class AppHost
                 return Failed(Loc.T("startup.cusError"), Loc.T("startup.systemClipboardUnavailable", ex.Message));
             }
 
-            overlay = new AvaloniaOverlayIndicator(screens, platform.MakeNonActivating);
+            overlay = realOverlay = new AvaloniaOverlayIndicator(screens, platform.MakeNonActivating);
         }
 
         var notifier = new AvaloniaNotifier(screens, $"CUS — {identity.DisplayName}", platform.MakeNonActivating);
@@ -208,6 +209,7 @@ public static class AppHost
             InfoLines = Info,
             Node = node,
             Notifier = notifier,
+            Overlay = realOverlay,
             Simulation = simulation,
             Shutdown = Shutdown,
             AutoStart = platform.SetUpAutoStart(options, node),

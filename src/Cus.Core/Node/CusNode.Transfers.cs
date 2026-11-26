@@ -21,7 +21,7 @@ public sealed partial class CusNode
     private readonly Dictionary<(string ItemId, string RequesterId), TransferRecord> _transfers = [];
     private string? _currentOfferId;
     private long _lastTransferNotifyTicks;
-    private (int Total, int Active) _lastTransferCounts;
+    private (int Total, int Active, int Incoming, int ActiveIncoming) _lastTransferCounts;
 
     /// <summary>Elenco o avanzamento dei trasferimenti cambiato (al massimo ogni 250 ms per l'avanzamento).</summary>
     public event EventHandler? TransfersChanged;
@@ -302,6 +302,8 @@ public sealed partial class CusNode
                 _transfers.Remove(key);
         }
 
+        PruneIncoming(now);
+
         foreach (var itemId in _offers.Keys.ToList())
         {
             if (itemId != _currentOfferId
@@ -309,6 +311,13 @@ public sealed partial class CusNode
                 _offers.Remove(itemId);
         }
     }
+
+    /// <summary>Sotto _offerGate: chi, cosa e in che stato, in uscita e in arrivo.</summary>
+    private List<(string ItemId, string? RequesterId, TransferState State)> TransferStates() =>
+        [
+            .. _transfers.Values.Select(t => (t.ItemId, (string?)t.RequesterId, t.State)),
+            .. _incoming.Values.Select(t => (t.ItemId, (string?)null, t.State)),
+        ];
 
     /// <summary>Notifica i cambiamenti; l'avanzamento al massimo ogni <see cref="TransferNotifyInterval"/>.</summary>
     private void OnTransfersChanged(bool force)
@@ -318,7 +327,8 @@ public sealed partial class CusNode
         bool countsChanged;
         lock (_offerGate)
         {
-            var counts = (_transfers.Count, _transfers.Values.Count(t => t.State == TransferState.Active));
+            var counts = (_transfers.Count, _transfers.Values.Count(t => t.State == TransferState.Active),
+                _incoming.Count, _incoming.Values.Count(t => t.State == TransferState.Active));
             countsChanged = counts != _lastTransferCounts;
             _lastTransferCounts = counts;
         }
@@ -344,9 +354,9 @@ public sealed partial class CusNode
                 bool changed;
                 lock (_offerGate)
                 {
-                    var before = _transfers.Values.Select(t => (t.ItemId, t.RequesterId, t.State)).ToList();
+                    var before = TransferStates();
                     PruneTransfers(DateTimeOffset.UtcNow);
-                    changed = !before.SequenceEqual(_transfers.Values.Select(t => (t.ItemId, t.RequesterId, t.State)));
+                    changed = !before.SequenceEqual(TransferStates());
                 }
 
                 if (changed)

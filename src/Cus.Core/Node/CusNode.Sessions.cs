@@ -235,11 +235,11 @@ public sealed partial class CusNode
             }
             else if (_memberSession is { } member)
             {
-                source = new RemoteFileSource(this, member.Host, entry.ItemId);
+                source = new RemoteFileSource(this, member.Host, entry.ItemId, incoming: IncomingFiles.From(entry.Content, entry.OriginName));
             }
             else if (_hostSession is { } host && host.Members.TryGetValue(entry.OriginDeviceId, out var origin))
             {
-                source = new RemoteFileSource(this, origin.Connection, entry.ItemId);
+                source = new RemoteFileSource(this, origin.Connection, entry.ItemId, incoming: IncomingFiles.From(entry.Content, entry.OriginName));
             }
             else
             {

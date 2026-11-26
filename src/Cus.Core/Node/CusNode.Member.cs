@@ -253,7 +253,7 @@ public sealed partial class CusNode
             // supererà. Applicare questa ora lascerebbe questo PC diverso dagli altri.
             if (session.PendingPushes.Count > 0)
                 return;
-            var source = item.Content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, connection, item.ItemId!) : null;
+            var source = item.Content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, connection, item.ItemId!, incoming: IncomingFiles.From(item.Content, originName)) : null;
             var originId = item.OriginDeviceId is { Length: 32 } id ? id : connection.Remote.DeviceId;
             QueueClipboardWrite(new ClipboardWrite(
                 Interlocked.Increment(ref _clipboardStamp),

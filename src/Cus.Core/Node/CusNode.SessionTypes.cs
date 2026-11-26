@@ -223,10 +223,41 @@ public sealed partial class CusNode
 
     /// <summary>File da leggere da un altro PC: tramite l'host per i membri, direttamente dall'origine per l'host.</summary>
     /// <param name="forDeviceId">L'host che inoltra per un membro: chi incolla davvero, da mostrare al PC d'origine.</param>
+    /// <param name="incoming">Questo PC incolla: le letture compaiono tra i file in arrivo. Null per gli inoltri.</param>
     private sealed class RemoteFileSource(
-        CusNode node, PeerConnection connection, string itemId, bool notify = true, string? forDeviceId = null, string? forName = null) : IRemoteFileSource
+        CusNode node, PeerConnection connection, string itemId, bool notify = true, string? forDeviceId = null, string? forName = null,
+        IncomingFiles? incoming = null) : IRemoteFileSource
     {
         public async Task<byte[]> ReadAsync(int fileIndex, long offset, int count, CancellationToken cancellationToken = default)
+        {
+            if (incoming is null)
+                return await ReadFromPeerAsync(fileIndex, offset, count, cancellationToken);
+
+            IncomingRecord record;
+            try
+            {
+                record = node.BeginIncomingRead(itemId, incoming, fileIndex, offset);
+            }
+            catch (RemoteFileUnavailableException ex) when (notify)
+            {
+                node._notifier.Error(Loc.T("session.canTPaste", ex.Message));
+                throw;
+            }
+
+            try
+            {
+                var data = await ReadFromPeerAsync(fileIndex, offset, count, cancellationToken);
+                node.EndIncomingRead(record, fileIndex, offset, data.Length);
+                return data;
+            }
+            catch
+            {
+                node.FailIncomingRead(record);
+                throw;
+            }
+        }
+
+        private async Task<byte[]> ReadFromPeerAsync(int fileIndex, long offset, int count, CancellationToken cancellationToken)
         {
             try
             {

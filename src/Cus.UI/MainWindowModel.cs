@@ -23,6 +23,9 @@ public sealed record MainWindowModel
 
     public AvaloniaNotifier? Notifier { get; init; }
 
+    /// <summary>Indicatore vero (null con clipboard simulata): il menu dell'area di notifica lo nasconde e lo mostra.</summary>
+    public AvaloniaOverlayIndicator? Overlay { get; init; }
+
     /// <summary>Presente solo con clipboard simulata.</summary>
     public ISimulationControls? Simulation { get; init; }
 

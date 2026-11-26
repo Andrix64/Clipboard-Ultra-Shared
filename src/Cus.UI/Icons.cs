@@ -14,12 +14,18 @@ public static class Icons
     public const string ArrowDown = "\uf063";
     /// <summary>verso chi scarica.</summary>
     public const string ArrowRight = "\uf061";
+    /// <summary>da chi arriva.</summary>
+    public const string ArrowLeft = "\uf060";
     /// <summary>bidirezionale.</summary>
     public const string Bidirectional = "\uf362";
     /// <summary>host.</summary>
     public const string Star = "\uf005";
     /// <summary>trasferimenti.</summary>
     public const string Transfers = "\uf338";
+    /// <summary>file in uscita da questo PC.</summary>
+    public const string Upload = "\uf093";
+    /// <summary>file in arrivo su questo PC.</summary>
+    public const string Download = "\uf019";
     /// <summary>visibile.</summary>
     public const string Eye = "\uf06e";
     /// <summary>non visibile.</summary>

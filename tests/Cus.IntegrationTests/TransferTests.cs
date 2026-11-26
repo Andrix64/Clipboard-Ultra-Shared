@@ -148,6 +148,61 @@ public sealed class TransferTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task IncomingFiles_AreTrackedOnWhoPastes_NotOnTheRelayingHost()
+    {
+        var (host, b, c) = await StartGroupAsync();
+        b.Clipboard.Copy(ClipboardContent.FromFiles(TestFiles.Create(_root.Path, "b-files", ("foto.jpg", 2 * Chunk))));
+        await Eventually.TrueAsync(() => c.FileSource is not null, "c riceve i file");
+        var source = c.FileSource!;
+
+        await source.ReadAsync(0, 0, Chunk);
+
+        var incoming = Assert.Single(c.Node.IncomingTransfers);
+        Assert.Equal("b", incoming.OriginName);
+        Assert.Equal("foto.jpg", incoming.ItemName);
+        Assert.Equal(TransferState.Active, incoming.State);
+        Assert.Equal(0.5, incoming.Progress);
+        await Eventually.TrueAsync(() => c.Overlay.State?.ActiveIncomingTransfers == 1, "l'indicatore di c conta il file in arrivo");
+        Assert.Empty(host.Node.IncomingTransfers);
+        Assert.Empty(b.Node.IncomingTransfers);
+
+        await source.ReadAsync(0, Chunk, Chunk);
+
+        Assert.Equal(TransferState.Completed, Assert.Single(c.Node.IncomingTransfers).State);
+        await Eventually.TrueAsync(() => c.Overlay.State is { IncomingTransfers: 1, ActiveIncomingTransfers: 0 }, "concluso, ancora in elenco");
+    }
+
+    [Fact]
+    public async Task CancelledIncomingFile_FailsAtTheNextRead_OnWhoPastes()
+    {
+        var (host, b, _) = await StartGroupAsync();
+        b.Clipboard.Copy(ClipboardContent.FromFiles(TestFiles.Create(_root.Path, "b-files", ("a.bin", 3 * Chunk))));
+        await Eventually.TrueAsync(() => host.FileSource is not null, "l'host riceve i file");
+        var source = host.FileSource!;
+        await source.ReadAsync(0, 0, Chunk);
+        var incoming = Assert.Single(host.Node.IncomingTransfers);
+
+        host.Node.CancelIncomingTransfer(incoming.ItemId);
+
+        Assert.Equal(TransferState.Cancelled, Assert.Single(host.Node.IncomingTransfers).State);
+        var error = await Assert.ThrowsAsync<RemoteFileUnavailableException>(() => source.ReadAsync(0, Chunk, Chunk));
+        Assert.Contains("annullata", error.Message);
+        Assert.Contains(host.Notifier.Errors, e => e.Contains("annullata", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task OverlayButton_RaisesTheIncomingTransfersRequest()
+    {
+        var (_, b, _) = await StartGroupAsync();
+        var raised = false;
+        b.Node.IncomingTransfersRequested += (_, _) => raised = true;
+
+        b.Overlay.ClickIncomingTransfers();
+
+        Assert.True(raised);
+    }
+
+    [Fact]
     public async Task OverlayButton_RaisesTheTransfersRequest()
     {
         var (_, b, _) = await StartGroupAsync();

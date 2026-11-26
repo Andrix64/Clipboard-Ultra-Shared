@@ -12,6 +12,8 @@ public sealed class RecordingOverlayIndicator : IOverlayIndicator
 
     public event EventHandler? TransfersRequested;
 
+    public event EventHandler? IncomingTransfersRequested;
+
     public event EventHandler? DirectionToggleRequested;
 
     public event EventHandler? StateChanged;
@@ -37,6 +39,9 @@ public sealed class RecordingOverlayIndicator : IOverlayIndicator
 
     /// <summary>Simula il pulsante dei trasferimenti.</summary>
     public void ClickTransfers() => TransfersRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Simula il pulsante dei file in arrivo.</summary>
+    public void ClickIncomingTransfers() => IncomingTransfersRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>Simula il pulsante sola lettura / bidirezionale del membro.</summary>
     public void ClickDirection() => DirectionToggleRequested?.Invoke(this, EventArgs.Empty);

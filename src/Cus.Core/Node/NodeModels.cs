@@ -124,5 +124,18 @@ public sealed record TransferView(
     public double Progress => TotalBytes <= 0 ? 1 : Math.Clamp((double)BytesDone / TotalBytes, 0, 1);
 }
 
+/// <summary>File di un altro PC che questo PC sta incollando (scaricando).</summary>
+public sealed record IncomingTransferView(
+    string ItemId,
+    string OriginName,
+    string ItemName,
+    long TotalBytes,
+    long BytesDone,
+    TransferState State,
+    DateTimeOffset LastActivityUtc)
+{
+    public double Progress => TotalBytes <= 0 ? 1 : Math.Clamp((double)BytesDone / TotalBytes, 0, 1);
+}
+
 /// <summary>Errore mostrabile all'utente così com'è.</summary>
 public sealed class CusOperationException(string message, Exception? inner = null) : Exception(message, inner);

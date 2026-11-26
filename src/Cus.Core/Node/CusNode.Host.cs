@@ -359,7 +359,7 @@ public sealed partial class CusNode
             {
                 var stamp = Interlocked.Increment(ref _clipboardStamp);
                 Interlocked.Exchange(ref _lastRemoteWriteStamp, stamp);
-                var source = content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, originConnection, itemId) : null;
+                var source = content.Kind == ClipboardContentKind.Files ? new RemoteFileSource(this, originConnection, itemId, incoming: IncomingFiles.From(content, originName)) : null;
                 // La scrittura avviene fuori da _gate; la copia si conferma e si distribuisce comunque,
                 // anche se la clipboard dell'host è occupata, altrimenti il membro resterebbe bloccato.
                 QueueClipboardWrite(new ClipboardWrite(

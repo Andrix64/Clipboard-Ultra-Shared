@@ -69,6 +69,8 @@ public sealed record ClipboardSummary(
 /// <param name="Current">Ultimo contenuto della clipboard condivisa, null se ancora nessuno.</param>
 /// <param name="Transfers">Trasferimenti di file di questo PC (in corso o appena finiti).</param>
 /// <param name="ActiveTransfers">Quanti di questi sono ancora in corso.</param>
+/// <param name="IncomingTransfers">File di altri PC che questo PC sta incollando (in corso o appena finiti).</param>
+/// <param name="ActiveIncomingTransfers">Quanti di questi sono ancora in corso.</param>
 /// <param name="CanToggleDirection">Membro con accesso bidirezionale: può passare a sola lettura e tornare indietro.</param>
 public sealed record SessionIndicatorState(
     IReadOnlyList<SessionParticipant> Participants,
@@ -76,7 +78,9 @@ public sealed record SessionIndicatorState(
     int Transfers = 0,
     int ActiveTransfers = 0,
     bool CanToggleDirection = false,
-    ShareDirection MyDirection = ShareDirection.Bidirectional);
+    ShareDirection MyDirection = ShareDirection.Bidirectional,
+    int IncomingTransfers = 0,
+    int ActiveIncomingTransfers = 0);
 
 /// <summary>
 /// Indicatore sempre in primo piano su tutti i monitor che segnala la condivisione attiva e mostra
@@ -88,6 +92,9 @@ public interface IOverlayIndicator : IDisposable
 
     /// <summary>Il proprietario dei file chiede di vedere i trasferimenti in corso.</summary>
     event EventHandler? TransfersRequested;
+
+    /// <summary>L'utente chiede di vedere i file che questo PC sta ricevendo.</summary>
+    event EventHandler? IncomingTransfersRequested;
 
     /// <summary>Il membro chiede di passare da bidirezionale a sola lettura o viceversa.</summary>
     event EventHandler? DirectionToggleRequested;

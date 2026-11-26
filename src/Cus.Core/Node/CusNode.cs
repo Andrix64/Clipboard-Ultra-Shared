@@ -111,6 +111,7 @@ public sealed partial class CusNode : IAsyncDisposable
         _monitor.Changed += (_, e) => _localChanges.Writer.TryWrite(e);
         _overlay.LeaveRequested += (_, _) => RunInBackground(() => LeaveSessionAsync());
         _overlay.TransfersRequested += (_, _) => TransfersRequested?.Invoke(this, EventArgs.Empty);
+        _overlay.IncomingTransfersRequested += (_, _) => IncomingTransfersRequested?.Invoke(this, EventArgs.Empty);
         _overlay.DirectionToggleRequested += (_, _) => RunInBackground(ToggleMyDirectionAsync);
     }
 
@@ -181,6 +182,9 @@ public sealed partial class CusNode : IAsyncDisposable
 
     /// <summary>L'utente ha chiesto dall'indicatore di vedere i trasferimenti dei suoi file.</summary>
     public event EventHandler? TransfersRequested;
+
+    /// <summary>L'utente ha chiesto dall'indicatore di vedere i file che sta ricevendo.</summary>
+    public event EventHandler? IncomingTransfersRequested;
 
     /// <summary>Righe di attività leggibili (copie inviate e ricevute, ingressi e uscite).</summary>
     public event Action<string>? Activity;
@@ -480,13 +484,16 @@ public sealed partial class CusNode : IAsyncDisposable
         }
 
         var transfers = Transfers;
+        var incoming = IncomingTransfers;
         _overlay.Show(new SessionIndicatorState(
             session.Participants,
             CurrentClipboard,
             transfers.Count,
             transfers.Count(t => t.State == TransferState.Active),
             CanToggleDirection: session.Role == SessionRole.Member && session.MyGranted == ShareDirection.Bidirectional,
-            session.MyDirection));
+            session.MyDirection,
+            incoming.Count,
+            incoming.Count(t => t.State == TransferState.Active)));
     }
 
     private void SetCurrentClipboard(ClipboardSummary summary)

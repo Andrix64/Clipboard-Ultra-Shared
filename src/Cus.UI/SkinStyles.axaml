@@ -134,6 +134,11 @@
   <Style Selector="Button.pill:pointerover /template/ Border#Body">
     <Setter Property="Background" Value="{x:Static ui:Skin.LimeGlossHoverBrush}" />
   </Style>
+  <!-- Pulsante quadrato con solo un'icona (l'occhio dell'indicatore): stessa altezza delle altre
+       pillole, niente margini ai lati (la larghezza la decide il contenitore quadrato) -->
+  <Style Selector="Button.pill.square /template/ Border#Body">
+    <Setter Property="Padding" Value="0,4" />
+  </Style>
   <Style Selector="Button.pill:pressed">
     <Setter Property="RenderTransform" Value="scale(0.96)" />
   </Style>

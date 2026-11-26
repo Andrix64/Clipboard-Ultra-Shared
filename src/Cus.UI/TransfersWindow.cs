@@ -10,28 +10,34 @@ namespace Cus.UI;
 
 /// <summary>
 /// Copie dei propri file ancora in corso: a chi vanno, a che punto sono, con la possibilità di
-/// annullarle. Si apre dal pulsante dei trasferimenti dell'indicatore o dalla scheda della sessione; una sola alla volta.
+/// annullarle. Si apre dal pulsante dei trasferimenti dell'indicatore o dalla scheda della sessione.
+/// Con <c>incoming</c> mostra invece i file di altri PC che questo PC sta ricevendo. Una sola per tipo alla volta.
 /// </summary>
 public sealed class TransfersWindow : Window
 {
-    private static TransfersWindow? s_open;
+    private static TransfersWindow? s_openOutgoing;
+    private static TransfersWindow? s_openIncoming;
 
     private readonly CusNode _node;
+    private readonly bool _incoming;
     private readonly StackPanel _rows = new() { Spacing = 6 };
     private readonly DispatcherTimer _timer;
 
-    private TransfersWindow(CusNode node)
+    private TransfersWindow(CusNode node, bool incoming)
     {
         _node = node;
+        _incoming = incoming;
         Topmost = true;
-        DialogShell.Configure(this, Loc.T("transfersWindow.cusTransfers"), 460, WindowStartupLocation.CenterScreen);
+        DialogShell.Configure(this, Loc.T(incoming ? "transfersWindow.cusIncoming" : "transfersWindow.cusTransfers"), 460, WindowStartupLocation.CenterScreen);
 
         var close = Skin.Pill(Loc.T("common.close"));
         close.IsCancel = true;
         close.Click += (_, _) => Close();
         DockPanel.SetDock(close, Dock.Right);
 
-        var heading = Skin.LcdText(Loc.T("transfersWindow.transfersOfYourFiles", Icons.Transfers), 13, bold: true, dark: true);
+        var heading = Skin.LcdText(incoming
+            ? Loc.T("transfersWindow.incomingFiles", Icons.Download)
+            : Loc.T("transfersWindow.transfersOfYourFiles", Icons.Upload), 13, bold: true, dark: true);
         heading.TextWrapping = TextWrapping.NoWrap;
         heading.VerticalAlignment = VerticalAlignment.Center;
 
@@ -59,26 +65,43 @@ public sealed class TransfersWindow : Window
         Closed += (_, _) =>
         {
             _timer.Stop();
-            s_open = null;
+            if (_incoming)
+                s_openIncoming = null;
+            else
+                s_openOutgoing = null;
         };
     }
 
-    public static void ShowFor(CusNode node)
+    public static void ShowFor(CusNode node, bool incoming = false)
     {
-        if (s_open is { } open)
+        if ((incoming ? s_openIncoming : s_openOutgoing) is { } open)
         {
             open.Activate();
             return;
         }
 
-        s_open = new TransfersWindow(node);
-        s_open.Show();
+        var window = new TransfersWindow(node, incoming);
+        if (incoming)
+            s_openIncoming = window;
+        else
+            s_openOutgoing = window;
+        window.Show();
     }
 
     private void Refresh()
     {
-        var transfers = _node.Transfers;
         _rows.Children.Clear();
+        if (_incoming)
+        {
+            var incoming = _node.IncomingTransfers;
+            if (incoming.Count == 0)
+                _rows.Children.Add(Skin.LcdText(Loc.T("transfersWindow.noIncomingFiles"), 12, dark: true));
+            foreach (var transfer in incoming)
+                _rows.Children.Add(IncomingRow(transfer));
+            return;
+        }
+
+        var transfers = _node.Transfers;
         if (transfers.Count == 0)
         {
             _rows.Children.Add(Skin.LcdText(Loc.T("transfersWindow.noCopiesOfYourFilesIn"), 12, dark: true));
@@ -89,42 +112,54 @@ public sealed class TransfersWindow : Window
             _rows.Children.Add(Row(transfer));
     }
 
-    private Control Row(TransferView transfer)
+    private Control Row(TransferView transfer) => Row(
+        transfer.ItemName, $"{Icons.ArrowRight} {DisplayText.Sanitize(transfer.RequesterName, 64)}",
+        transfer.BytesDone, transfer.TotalBytes, transfer.Progress, transfer.State,
+        () => _node.CancelTransfer(transfer.ItemId, transfer.RequesterId));
+
+    private Control IncomingRow(IncomingTransferView transfer) => Row(
+        transfer.ItemName, $"{Icons.ArrowLeft} {DisplayText.Sanitize(transfer.OriginName, 64)}",
+        transfer.BytesDone, transfer.TotalBytes, transfer.Progress, transfer.State,
+        () => _node.CancelIncomingTransfer(transfer.ItemId));
+
+    /// <param name="peer">Verso chi (in uscita) o da chi (in arrivo), con la freccia davanti.</param>
+    private Control Row(
+        string itemName, string peer, long bytesDone, long totalBytes, double progress, TransferState transferState, Action cancelTransfer)
     {
-        var state = transfer.State switch
+        var state = transferState switch
         {
-            TransferState.Active => $"{transfer.Progress:P0}",
+            TransferState.Active => $"{progress:P0}",
             TransferState.Completed => Loc.T("transfersWindow.completed"),
             TransferState.Cancelled => Loc.T("transfersWindow.cancelled"),
             _ => Loc.T("transfersWindow.stopped"),
         };
-        var name = Skin.LcdText($"{DisplayText.MiddleEllipsis(DisplayText.Sanitize(transfer.ItemName, 260), 34)}", 12, bold: true, dark: true);
+        var name = Skin.LcdText($"{DisplayText.MiddleEllipsis(DisplayText.Sanitize(itemName, 260), 34)}", 12, bold: true, dark: true);
         name.TextWrapping = TextWrapping.NoWrap;
         var detail = Skin.LcdText(
-            $"{Icons.ArrowRight} {DisplayText.Sanitize(transfer.RequesterName, 64)} · {DisplayText.FormatSize(transfer.BytesDone)} {Loc.T("transfersWindow.of")} {DisplayText.FormatSize(transfer.TotalBytes)} · {state}",
+            $"{peer} · {DisplayText.FormatSize(bytesDone)} {Loc.T("transfersWindow.of")} {DisplayText.FormatSize(totalBytes)} · {state}",
             11, dark: true);
 
         var bar = new ProgressBar
         {
             Minimum = 0,
             Maximum = 1,
-            Value = transfer.Progress,
+            Value = progress,
             Height = 8,
             MinHeight = 8,
-            Foreground = transfer.State == TransferState.Cancelled ? Skin.AlertBrush : Skin.PillBrush,
+            Foreground = transferState == TransferState.Cancelled ? Skin.AlertBrush : Skin.PillBrush,
             Background = new SolidColorBrush(Color.Parse("#0B1406")),
             CornerRadius = new CornerRadius(3),
         };
 
         var row = new DockPanel { Margin = new Thickness(0, 2) };
-        if (transfer.State == TransferState.Active)
+        if (transferState == TransferState.Active)
         {
             var cancel = Skin.Pill(Loc.T("common.cancel"));
             cancel.Margin = new Thickness(10, 0, 0, 0);
             cancel.VerticalAlignment = VerticalAlignment.Center;
             cancel.Click += (_, _) =>
             {
-                _node.CancelTransfer(transfer.ItemId, transfer.RequesterId);
+                cancelTransfer();
                 Refresh();
             };
             DockPanel.SetDock(cancel, Dock.Right);
