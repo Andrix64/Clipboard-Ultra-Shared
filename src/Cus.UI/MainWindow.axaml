@@ -41,6 +41,8 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
                   <Button x:Name="RefreshHistoryButton" Classes="pill" Content="{ui:Tr main.refresh}" />
                   <Button x:Name="UseHistoryButton" Classes="pill" Content="{ui:Tr main.copy}" />
+                  <Button x:Name="ClearHistoryButton" Classes="pill" Content="{ui:Tr main.clearHistory}"
+                          ToolTip.Tip="{ui:Tr main.clearHistoryTip}" />
                 </StackPanel>
                 <TextBlock x:Name="HistoryTitle" Classes="engraved" Text="{ui:Tr main.lastCopiesOnTheHostS}" VerticalAlignment="Center" />
               </DockPanel>

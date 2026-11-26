@@ -323,6 +323,17 @@ public sealed class CusDatabase : IDisposable
         }
     }
 
+    /// <summary>Cancella tutta la cronologia di questo PC (sessione in corso e precedenti).</summary>
+    /// <returns>Quante voci sono state cancellate.</returns>
+    public int ClearHistory()
+    {
+        lock (_gate)
+        {
+            using var command = Command("DELETE FROM history;");
+            return command.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>Le voci più recenti per prime.</summary>
     /// <param name="sessionId">Solo le voci di questa sessione; null: tutte.</param>
     public IReadOnlyList<HistoryEntry> GetHistory(string? sessionId = null)
