@@ -15,10 +15,15 @@ namespace Cus.App.Windows;
 
 internal static class Program
 {
+    private static Mutex? _profileMutex;
+    private static EventWaitHandle? _activateSignal;
+
     [STAThread]
     public static int Main(string[] args)
     {
         var model = Compose(args);
+        if (model is null)
+            return 0; // Già aperto: la prima istanza è stata portata in primo piano, questa esce in silenzio.
 
         AppBuilder.Configure(() => new Cus.UI.App { Model = model })
             .UsePlatformDetect()
@@ -32,7 +37,7 @@ internal static class Program
     /// <summary>
     /// Composition root: l'unico punto in cui si scelgono le implementazioni (Windows reali o simulate).
     /// </summary>
-    private static MainWindowModel Compose(string[] args)
+    private static MainWindowModel? Compose(string[] args)
     {
         CusOptions options;
         try
@@ -46,8 +51,18 @@ internal static class Program
 
         // Un profilo per volta: due istanze sullo stesso DB si contenderebbero identità e porta.
         var mutex = new Mutex(initiallyOwned: true, $@"Local\CUS-profile-{options.Profile}", out var createdNew);
+        var activateName = $@"Local\CUS-activate-{options.Profile}";
         if (!createdNew)
-            return Failed("CUS — errore", $"Il profilo '{options.Profile}' è già aperto in un'altra finestra di CUS.");
+        {
+            mutex.Dispose();
+            SignalRunningInstance(activateName);
+            return null;
+        }
+
+        // Campo statico: con una sola variabile locale il GC finalizzerebbe il mutex a Compose finito,
+        // la maniglia si chiuderebbe e un secondo avvio risulterebbe "primo".
+        _profileMutex = mutex;
+        ListenForActivation(activateName);
 
         var paths = new ProfileAppPaths(options.Profile);
         var info = new List<string>
@@ -151,6 +166,43 @@ internal static class Program
             Shutdown = Shutdown,
         };
     }
+
+    /// <summary>Chiede alla prima istanza di portarsi in primo piano. Il secondo avvio ha appena ricevuto
+    /// il diritto di primo piano dall'utente e lo cede a tutti, altrimenti Windows lampeggia solo la barra.</summary>
+    private static void SignalRunningInstance(string eventName)
+    {
+        try
+        {
+            AllowSetForegroundWindow(-1);
+            using var signal = EventWaitHandle.OpenExisting(eventName);
+            signal.Set();
+        }
+        catch (Exception ex) when (ex is WaitHandleCannotBeOpenedException or UnauthorizedAccessException or IOException)
+        {
+            // La prima istanza si sta chiudendo: niente da fare, nessun avviso.
+        }
+    }
+
+    private static void ListenForActivation(string eventName)
+    {
+        _activateSignal = new EventWaitHandle(false, EventResetMode.AutoReset, eventName);
+        var thread = new Thread(() =>
+        {
+            while (_activateSignal.WaitOne())
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if ((Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow is Cus.UI.MainWindow window)
+                        window.ShowFromTray();
+                });
+            }
+        })
+        { IsBackground = true, Name = "CUS-activate" };
+        thread.Start();
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool AllowSetForegroundWindow(int processId);
 
     private static MainWindowModel Failed(string title, string error) => new()
     {
