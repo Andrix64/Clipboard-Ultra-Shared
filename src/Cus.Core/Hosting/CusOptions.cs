@@ -23,7 +23,7 @@ public sealed record PeerEndpoint(string Host, int Port)
     public static PeerEndpoint Parse(string value, int defaultPort = NetworkDefaults.DefaultPort)
     {
         if (string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException("Indirizzo del peer vuoto.", nameof(value));
+            throw new ArgumentException(Loc.T("options.emptyPeerAddress"), nameof(value));
 
         value = value.Trim();
         string host;
@@ -33,13 +33,13 @@ public sealed record PeerEndpoint(string Host, int Port)
         {
             var close = value.IndexOf(']');
             if (close < 0)
-                throw new ArgumentException($"Indirizzo IPv6 senza ']': '{value}'.", nameof(value));
+                throw new ArgumentException(Loc.T("options.ipv6AddressWithout", value), nameof(value));
             host = value[1..close];
             var rest = value[(close + 1)..];
             if (rest.Length > 0)
             {
                 if (!rest.StartsWith(':'))
-                    throw new ArgumentException($"Indirizzo del peer non valido: '{value}'.", nameof(value));
+                    throw new ArgumentException(Loc.T("options.invalidPeerAddress", value), nameof(value));
                 portText = rest[1..];
             }
         }
@@ -52,7 +52,7 @@ public sealed record PeerEndpoint(string Host, int Port)
         else if (value.Contains(':'))
         {
             throw new ArgumentException(
-                $"Indirizzo IPv6 ambiguo: '{value}'. Scrivilo tra parentesi quadre, per esempio [::1]:23700.",
+                Loc.T("options.ambiguousIpv6AddressWriteItIn", value),
                 nameof(value));
         }
         else
@@ -61,7 +61,7 @@ public sealed record PeerEndpoint(string Host, int Port)
         }
 
         if (host.Length == 0)
-            throw new ArgumentException($"Host mancante in '{value}'.", nameof(value));
+            throw new ArgumentException(Loc.T("options.missingHostIn", value), nameof(value));
 
         var port = portText is null ? defaultPort : CusOptions.ParsePort(portText);
         return new PeerEndpoint(host, port);
@@ -84,9 +84,8 @@ public sealed partial record CusOptions
 {
     public const string DefaultProfile = "default";
 
-    public const string Usage =
-        "Uso: cus [--profile <nome>] [--name <nome del PC>] [--port <porta>] [--bind <ip>] [--clipboard real|simulated] "
-        + "[--peer <host[:porta]>]... [--no-discovery]";
+    /// <summary>Sintassi della riga di comando, nella lingua corrente.</summary>
+    public static string Usage => Loc.T("options.usageCusProfileNameNamePc");
 
     public string Profile { get; init; } = DefaultProfile;
 
@@ -133,20 +132,20 @@ public sealed partial record CusOptions
                 case "--name":
                     var displayName = ValueOf(args, ref i, name).Trim();
                     if (displayName.Length is 0 or > 64)
-                        throw new ArgumentException("Il nome del PC deve avere da 1 a 64 caratteri.");
+                        throw new ArgumentException(Loc.T("options.thePcNameMustBeTo"));
                     options = options with { DisplayName = displayName };
                     break;
                 case "--bind":
                     var bind = ValueOf(args, ref i, name);
                     if (!IPAddress.TryParse(bind, out var address))
-                        throw new ArgumentException($"Indirizzo di --bind non valido: '{bind}'.");
+                        throw new ArgumentException(Loc.T("options.invalidBindAddress", bind));
                     options = options with { BindAddress = address };
                     break;
                 case "--no-discovery":
                     options = options with { EnableDiscovery = false };
                     break;
                 default:
-                    throw new ArgumentException($"Argomento sconosciuto: '{name}'. {Usage}");
+                    throw new ArgumentException(Loc.T("options.unknownArgument", name, Usage));
             }
         }
 
@@ -157,13 +156,13 @@ public sealed partial record CusOptions
     {
         if (!ProfileNameRegex().IsMatch(profile))
             throw new ArgumentException(
-                $"Nome di profilo non valido: '{profile}'. Ammessi lettere, cifre, '-' e '_', massimo 32 caratteri.");
+                Loc.T("options.invalidProfileNameLettersDigitsAnd", profile));
     }
 
     internal static int ParsePort(string text)
     {
         if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
-            throw new ArgumentException($"Porta non valida: '{text}'. Deve essere un numero tra 1 e 65535.");
+            throw new ArgumentException(Loc.T("options.invalidPortItMustBeA", text));
         return port;
     }
 
@@ -171,13 +170,13 @@ public sealed partial record CusOptions
     {
         "real" => ClipboardMode.Real,
         "simulated" => ClipboardMode.Simulated,
-        _ => throw new ArgumentException($"Valore di --clipboard non valido: '{text}'. Usa 'real' o 'simulated'."),
+        _ => throw new ArgumentException(Loc.T("options.invalidClipboardValueUseRealOr", text)),
     };
 
     private static string ValueOf(IReadOnlyList<string> args, ref int i, string name)
     {
         if (i + 1 >= args.Count)
-            throw new ArgumentException($"Manca il valore di {name}. {Usage}");
+            throw new ArgumentException(Loc.T("options.missingValueFor", name, Usage));
         return args[++i];
     }
 

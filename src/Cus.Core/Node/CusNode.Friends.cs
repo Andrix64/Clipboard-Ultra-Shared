@@ -18,11 +18,11 @@ public sealed partial class CusNode
         if (level is not (AgreementLevel.AutoJoin or AgreementLevel.Anytime))
             throw new ArgumentOutOfRangeException(nameof(level));
         if (_hostSession?.Members.TryGetValue(deviceId, out var member) != true)
-            throw new CusOperationException("Il dispositivo non è più nella sessione.");
+            throw new CusOperationException(Loc.T("common.theDeviceIsNoLongerIn"));
 
         var connection = member!.Connection;
         var name = connection.Remote.DisplayName;
-        Log($"Patto \"{DescribeAgreement(level)}\" proposto a {name}: in attesa della risposta...");
+        Log(Loc.T("friends.pactProposedToWaitingForThe", DescribeAgreement(level), name));
         AgreementReplyMessage reply;
         try
         {
@@ -31,12 +31,12 @@ public sealed partial class CusNode
         }
         catch (Exception ex) when (ex is IOException or OperationCanceledException)
         {
-            throw new CusOperationException($"{name} non ha risposto alla proposta di patto.", ex);
+            throw new CusOperationException(Loc.T("friends.didnTAnswerThePactProposal", name), ex);
         }
 
         if (!reply.Accepted)
         {
-            Log($"{name} ha rifiutato il patto.");
+            Log(Loc.T("friends.declinedThePact", name));
             return false;
         }
 
@@ -44,7 +44,7 @@ public sealed partial class CusNode
         // connessione i due livelli si allineano al più basso.
         Friends.SetAgreement(deviceId, name, level);
         RememberEndpoint(connection);
-        Log($"Patto con {name}: {DescribeAgreement(level)}.");
+        Log(Loc.T("friends.pactWith", name, DescribeAgreement(level)));
         return true;
     }
 
@@ -80,7 +80,7 @@ public sealed partial class CusNode
         {
             Friends.SetAgreement(remote.DeviceId, remote.DisplayName, proposal.Level);
             RememberEndpoint(connection);
-            Log($"Patto con {remote.DisplayName}: {DescribeAgreement(proposal.Level)}.");
+            Log(Loc.T("friends.pactWith", remote.DisplayName, DescribeAgreement(proposal.Level)));
         }
 
         try
@@ -102,7 +102,7 @@ public sealed partial class CusNode
         if (Friends.Get(deviceId) is not { Agreement: not AgreementLevel.None } friend)
             return;
         Friends.SetAgreement(deviceId, friend.DisplayName, AgreementLevel.None);
-        Log($"Patto con {friend.DisplayName} sciolto.");
+        Log(Loc.T("friends.pactWithDissolved", friend.DisplayName));
 
         var live = _connections.Keys.FirstOrDefault(c => c.IsStarted && !c.IsClosed && c.Remote.DeviceId == deviceId);
         if (live is not null)
@@ -126,7 +126,7 @@ public sealed partial class CusNode
                 {
                     // Lo scambio iniziale porta il livello (ora nessuno): l'altro PC lo abbassa da sé.
                     var connection = await ConnectAsync(endpoint.Host, endpoint.Port, _lifetime.Token);
-                    await connection.CloseAsync("patto sciolto");
+                    await connection.CloseAsync(WireTexts.PactDissolved.Text);
                 }
                 catch (Exception ex)
                 {
@@ -141,8 +141,8 @@ public sealed partial class CusNode
     {
         Friends.SetSensitiveTrust(deviceId, DisplayText.Sanitize(displayName, 64), trusted);
         Log(trusted
-            ? $"{displayName} vedrà anche i contenuti sensibili che copi."
-            : $"{displayName} non vedrà più i contenuti sensibili che copi.");
+            ? Loc.T("friends.willAlsoSeeTheSensitiveContent", displayName)
+            : Loc.T("friends.willNoLongerSeeTheSensitive", displayName));
     }
 
     /// <summary>Toglie un amico: scioglie il patto (anche dall'altra parte) e la fiducia.</summary>
@@ -161,16 +161,16 @@ public sealed partial class CusNode
         var name = connection.Remote.DisplayName;
         var now = Friends.AgreementWith(connection.Remote.DeviceId);
         var message = now == AgreementLevel.None
-            ? $"{name} ha sciolto il patto \"{DescribeAgreement(before)}\"."
-            : $"{name} ha ridotto il patto a \"{DescribeAgreement(now)}\".";
+            ? Loc.T("friends.dissolvedThePact", name, DescribeAgreement(before))
+            : Loc.T("friends.reducedThePactTo", name, DescribeAgreement(now));
         Log(message);
         _notifier.Info(message);
     }
 
     public static string DescribeAgreement(AgreementLevel level) => level switch
     {
-        AgreementLevel.AutoJoin => "entra senza conferma",
-        AgreementLevel.Anytime => "collegamento in qualsiasi momento",
-        _ => "nessuno",
+        AgreementLevel.AutoJoin => Loc.T("friends.joinsWithoutConfirmation"),
+        AgreementLevel.Anytime => Loc.T("friends.connectAtAnyTime"),
+        _ => Loc.T("friends.none"),
     };
 }

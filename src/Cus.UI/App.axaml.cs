@@ -25,9 +25,15 @@ public partial class App : Application
             if (model.Node is not null)
             {
                 MainWindow? window = null;
-                var open = new NativeMenuItem("Apri CUS");
+                var open = new NativeMenuItem(Loc.T("app.openCus"));
                 open.Click += (_, _) => window?.ShowFromTray();
-                var exit = new NativeMenuItem("Esci");
+                var exit = new NativeMenuItem(Loc.T("app.exit"));
+                // Cambio di lingua dalle impostazioni: anche il menu dell'area di notifica.
+                Loc.Changed += () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    open.Header = Loc.T("app.openCus");
+                    exit.Header = Loc.T("app.exit");
+                });
                 exit.Click += (_, _) => window?.ExitApplication();
                 var tray = new TrayIcon
                 {

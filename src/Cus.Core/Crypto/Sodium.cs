@@ -29,7 +29,7 @@ internal static unsafe partial class Sodium
     {
         // 0 = inizializzata ora, 1 = già inizializzata, -1 = errore.
         if (sodium_init() < 0)
-            throw new InvalidOperationException("Inizializzazione di libsodium fallita.");
+            throw new InvalidOperationException(Loc.T("crypto.libsodiumInitializationFailed"));
         return true;
     });
 
@@ -54,7 +54,7 @@ internal static unsafe partial class Sodium
     public static byte[] SignDetached(ReadOnlySpan<byte> message, ReadOnlySpan<byte> secretKey)
     {
         if (secretKey.Length != SignSecretKeyBytes)
-            throw new ArgumentException("Chiave Ed25519 privata non valida.", nameof(secretKey));
+            throw new ArgumentException(Loc.T("crypto.invalidEd25519PrivateKey"), nameof(secretKey));
 
         EnsureInitialized();
         var signature = new byte[SignBytes];
@@ -224,7 +224,7 @@ internal static unsafe partial class Sodium
     private static void Check(int result, string function)
     {
         if (result != 0)
-            throw new System.Security.Cryptography.CryptographicException($"{function} ha restituito {result}.");
+            throw new System.Security.Cryptography.CryptographicException(Loc.T("crypto.returned", function, result));
     }
 
     [LibraryImport(Library)]

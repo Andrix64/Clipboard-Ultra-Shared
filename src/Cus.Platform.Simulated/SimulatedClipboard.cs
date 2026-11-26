@@ -33,7 +33,7 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (content.Kind == ClipboardContentKind.Files && files is null)
-            throw new ArgumentException("Per scrivere file serve la sorgente remota.", nameof(files));
+            throw new ArgumentException(Loc.T("simulated.writingFilesRequiresTheRemoteSource"), nameof(files));
         Set(content, files, isOwnWrite: true);
         return Task.CompletedTask;
     }
@@ -54,10 +54,10 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
         }
 
         if (content is not { Kind: ClipboardContentKind.Files, Files: { } files })
-            throw new InvalidOperationException("La clipboard non contiene file.");
+            throw new InvalidOperationException(Loc.T("simulated.theClipboardDoesnTContainFiles"));
 
         if (!ClipboardFileNames.TryValidate(files, out var reason))
-            throw new InvalidDataException($"Elenco di file non valido: {reason}.");
+            throw new InvalidDataException(Loc.T("simulated.invalidFileList", reason));
 
         var written = new List<string>();
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(targetDirectory)) + Path.DirectorySeparatorChar;
@@ -65,7 +65,7 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
         {
             var target = Path.GetFullPath(Path.Combine(root, files[i].Name.Replace('/', Path.DirectorySeparatorChar)));
             if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException($"Nome di file non valido: '{files[i].Name}'.");
+                throw new InvalidDataException(Loc.T("simulated.invalidFileName", files[i].Name));
             if (files[i].IsDirectory)
             {
                 Directory.CreateDirectory(target);
@@ -89,7 +89,7 @@ public sealed class SimulatedClipboard : IClipboardMonitor, IClipboardWriter
                     if (chunk.Length > count)
                         chunk = chunk[..count];
                     if (chunk.Length == 0)
-                        throw new RemoteFileUnavailableException("Il PC d'origine ha restituito un blocco vuoto.");
+                        throw new RemoteFileUnavailableException(Loc.T("common.theSourcePcReturnedAnEmpty"));
                     await output.WriteAsync(chunk, cancellationToken);
                     offset += chunk.Length;
                 }

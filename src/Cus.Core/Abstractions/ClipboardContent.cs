@@ -70,11 +70,11 @@ public sealed record ClipboardContent
     /// <summary>Descrizione breve per UI e cronologia.</summary>
     public string Describe() => Kind switch
     {
-        ClipboardContentKind.Text when IsMarkedSensitive => "(testo sensibile, non condiviso)",
+        ClipboardContentKind.Text when IsMarkedSensitive => Loc.T("content.sensitiveTextNotShared"),
         ClipboardContentKind.Text => Text ?? "",
-        ClipboardContentKind.Image => $"(immagine, {ImagePng?.Length ?? 0:N0} byte)",
-        ClipboardContentKind.Files when Files is { Count: 1 } => $"(file: {Files[0].Name}, {Files[0].SizeBytes:N0} byte)",
-        ClipboardContentKind.Files => $"({Files?.Count ?? 0} file, {Files?.Sum(f => f.SizeBytes) ?? 0:N0} byte)",
-        _ => "(contenuto sconosciuto)",
+        ClipboardContentKind.Image => Loc.T("content.imageBytes", ImagePng?.Length ?? 0),
+        ClipboardContentKind.Files when Files is { Count: 1 } => Loc.T("content.fileBytes", Files[0].Name, Files[0].SizeBytes),
+        ClipboardContentKind.Files => Loc.T("content.filesBytes", Files?.Count ?? 0, Files?.Sum(f => f.SizeBytes) ?? 0),
+        _ => Loc.T("content.unknownContent"),
     };
 }

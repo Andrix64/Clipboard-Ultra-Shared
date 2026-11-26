@@ -28,7 +28,7 @@ internal sealed class ClipboardFormats
     private static ushort Register(string name)
     {
         var id = Native.RegisterClipboardFormatW(name);
-        return id == 0 ? throw new Win32Exception($"RegisterClipboardFormat('{name}') fallita.") : (ushort)id;
+        return id == 0 ? throw new Win32Exception(Loc.T("clipboard.registerclipboardformatFailed", name)) : (ushort)id;
     }
 }
 
@@ -74,7 +74,7 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
             if (_started)
                 return;
             if (!Native.AddClipboardFormatListener(_window.Handle))
-                throw new Win32Exception(Marshal.GetLastPInvokeError(), "AddClipboardFormatListener fallita.");
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), Loc.T("clipboard.addclipboardformatlistenerFailed"));
             _started = true;
         }).GetAwaiter().GetResult();
     }
@@ -350,7 +350,7 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
         if (content.Kind == ClipboardContentKind.Files)
         {
             if (content.Files is null || files is null)
-                throw new ArgumentException("Per scrivere file servono l'elenco e la sorgente remota.");
+                throw new ArgumentException(Loc.T("clipboard.writingFilesRequiresTheListAnd"));
             // Valida i nomi ricevuti: se l'elenco è pericoloso non si tocca la clipboard.
             var offered = new VirtualFileDataObject(content.Files, files, _formats);
             _lastWritten = content;
@@ -409,7 +409,7 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
         if (Native.SetClipboardData(format, handle) == 0)
         {
             Native.GlobalFree(handle);
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), $"SetClipboardData({format}) fallita.");
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), Loc.T("clipboard.setclipboarddataFailed", format));
         }
     }
 
@@ -429,5 +429,5 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
     private sealed record RawClipboard(bool Sensitive, List<string>? Paths, string? Text, byte[]? Png, byte[]? Dib);
 
     private sealed class ClipboardBusyException(int error)
-        : Win32Exception(error, "La clipboard è occupata da un'altra applicazione.");
+        : Win32Exception(error, Loc.T("clipboard.theClipboardIsInUseBy"));
 }

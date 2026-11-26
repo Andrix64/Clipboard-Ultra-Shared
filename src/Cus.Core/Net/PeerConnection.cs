@@ -153,7 +153,7 @@ public sealed class PeerConnection : IAsyncDisposable
     public async Task<T> ReceiveAsync<T>(TimeSpan timeout, CancellationToken cancellationToken = default, int maxBytes = SecureChannel.MaxMessageBytes) where T : CusMessage
     {
         var message = await ReceiveAsync(timeout, cancellationToken, maxBytes);
-        return message as T ?? throw new ProtocolException($"Atteso {typeof(T).Name}, ricevuto {message.GetType().Name}.");
+        return message as T ?? throw new ProtocolException(Loc.T("net.expectedReceived", typeof(T).Name, message.GetType().Name));
     }
 
     /// <exception cref="MessageTooLargeException">Il messaggio serializzato non entra in un frame: non inviato, connessione intatta.</exception>
@@ -161,7 +161,7 @@ public sealed class PeerConnection : IAsyncDisposable
     public async Task SendAsync(CusMessage message, CancellationToken cancellationToken = default)
     {
         if (IsClosed)
-            throw new IOException($"Connessione con {Remote.DisplayName} chiusa.");
+            throw new IOException(Loc.T("net.connectionWithClosed", Remote.DisplayName));
         var payload = message.Serialize();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         cts.CancelAfter(SendTimeout);
@@ -173,10 +173,10 @@ public sealed class PeerConnection : IAsyncDisposable
         {
             // Un invio interrotto, anche per annullamento di chi chiama, può lasciare un frame a metà
             // e il flusso cifrato avanzato: la connessione non è più utilizzabile e si chiude sempre.
-            Close($"invio fallito: {ex.Message}");
+            Close(Loc.T("net.sendFailed", ex.Message));
             if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
                 throw;
-            throw new IOException($"Connessione con {Remote.DisplayName} interrotta.", ex);
+            throw new IOException(Loc.T("net.connectionWithLost", Remote.DisplayName), ex);
         }
     }
 
@@ -195,12 +195,12 @@ public sealed class PeerConnection : IAsyncDisposable
             await using (cts.Token.Register(() => tcs.TrySetCanceled()))
             {
                 var reply = await tcs.Task;
-                return reply as TReply ?? throw new ProtocolException($"Risposta inattesa: {reply.GetType().Name}.");
+                return reply as TReply ?? throw new ProtocolException(Loc.T("net.unexpectedReply", reply.GetType().Name));
             }
         }
         catch (TaskCanceledException) when (IsClosed)
         {
-            throw new IOException($"Connessione con {Remote.DisplayName} chiusa.");
+            throw new IOException(Loc.T("net.connectionWithClosed", Remote.DisplayName));
         }
         finally
         {
@@ -212,7 +212,7 @@ public sealed class PeerConnection : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
-        reason ??= "chiusura";
+        reason ??= Loc.T("net.closing");
         _lifetime.Cancel();
         _handlerQueue.Writer.TryComplete();
         foreach (var pending in _pending.Values)
@@ -264,7 +264,7 @@ public sealed class PeerConnection : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        Close("chiusura");
+        Close(Loc.T("net.closing"));
         foreach (var task in new[] { _receiveLoop, _handlerLoop, _pingLoop })
         {
             if (task is not null)
@@ -282,7 +282,7 @@ public sealed class PeerConnection : IAsyncDisposable
             await channel.SendAsync(new HelloMessage(identity.DisplayName, identity.UserName, listenPort).Serialize(), ct);
             // Chiunque in rete arriva fin qui: il saluto (due nomi e una porta) non può pesare 8 MB.
             var hello = CusMessage.Deserialize(await channel.ReceiveAsync(ct, HelloMaxBytes)) as HelloMessage
-                ?? throw new ProtocolException("Atteso il saluto iniziale.");
+                ?? throw new ProtocolException(Loc.T("net.expectedTheInitialGreeting"));
             var remote = new DeviceInfo(
                 channel.RemoteDeviceId,
                 DisplayText.Sanitize(hello.DisplayName, 64),
@@ -299,7 +299,7 @@ public sealed class PeerConnection : IAsyncDisposable
 
     private async Task ReceiveLoopAsync()
     {
-        var reason = "connessione chiusa dall'altra parte";
+        var reason = Loc.T("net.connectionClosedByTheOtherSide");
         try
         {
             while (!_lifetime.IsCancellationRequested)
@@ -312,7 +312,7 @@ public sealed class PeerConnection : IAsyncDisposable
                     case PingMessage:
                         continue;
                     case ByeMessage bye:
-                        reason = DisplayText.Sanitize(bye.Reason, 200, "chiusura dall'altra parte");
+                        reason = WireTexts.Localize(DisplayText.Sanitize(bye.Reason, 200, Loc.T("net.closedByTheOtherSide")));
                         return;
                     case IReplyMessage reply when _pending.TryRemove(reply.RequestId, out var tcs):
                         tcs.TrySetResult(message);
@@ -327,19 +327,19 @@ public sealed class PeerConnection : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            reason = "chiusura";
+            reason = Loc.T("net.closing");
         }
         catch (Exception ex) when (ex is IOException or EndOfStreamException or SocketException or ObjectDisposedException)
         {
-            reason = "connessione interrotta";
+            reason = Loc.T("net.connectionLost");
         }
         catch (ProtocolException ex)
         {
-            reason = $"errore di protocollo: {ex.Message}";
+            reason = Loc.T("net.protocolError", ex.Message);
         }
         catch (Exception ex)
         {
-            reason = $"errore interno: {ex.Message}";
+            reason = Loc.T("net.internalError", ex.Message);
             System.Diagnostics.Trace.WriteLine($"CUS: errore nella ricezione da {Remote.DisplayName}: {ex}");
         }
         finally
@@ -365,16 +365,16 @@ public sealed class PeerConnection : IAsyncDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            Close("connessione interrotta");
+            Close(Loc.T("net.connectionLost"));
         }
         catch (ProtocolException ex)
         {
-            Close($"errore di protocollo: {ex.Message}");
+            Close(Loc.T("net.protocolError", ex.Message));
         }
         catch (Exception ex)
         {
             System.Diagnostics.Trace.WriteLine($"CUS: errore nella gestione di un messaggio da {Remote.DisplayName}: {ex}");
-            Close($"errore interno: {ex.Message}");
+            Close(Loc.T("net.internalError", ex.Message));
         }
     }
 
@@ -387,7 +387,7 @@ public sealed class PeerConnection : IAsyncDisposable
                 await Task.Delay(PingInterval, _lifetime.Token);
                 if (Environment.TickCount64 - Interlocked.Read(ref _lastReceivedTicks) > IdleTimeout.TotalMilliseconds)
                 {
-                    Close("nessuna risposta dall'altra parte");
+                    Close(Loc.T("net.noAnswerFromTheOtherSide"));
                     return;
                 }
 

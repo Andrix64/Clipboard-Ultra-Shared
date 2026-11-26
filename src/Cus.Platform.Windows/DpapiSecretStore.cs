@@ -96,7 +96,7 @@ public sealed unsafe class DpapiSecretStore(string dataDirectory) : ISecretStore
                 ? Native.CryptProtectData(&inBlob, "CUS", entropyPointer, 0, 0, CRYPTPROTECT_UI_FORBIDDEN, &outBlob)
                 : Native.CryptUnprotectData(&inBlob, 0, entropyPointer, 0, 0, CRYPTPROTECT_UI_FORBIDDEN, &outBlob);
             if (!ok)
-                throw new Win32Exception(Marshal.GetLastPInvokeError(), protect ? "CryptProtectData fallita." : "CryptUnprotectData fallita.");
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), protect ? Loc.T("secrets.cryptprotectdataFailed") : Loc.T("secrets.cryptunprotectdataFailed"));
 
             try
             {
@@ -127,7 +127,7 @@ public sealed unsafe class DpapiSecretStore(string dataDirectory) : ISecretStore
     private string PathFor(string name)
     {
         if (name.Length == 0 || name.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_')))
-            throw new ArgumentException($"Nome di segreto non valido: '{name}'.", nameof(name));
+            throw new ArgumentException(Loc.T("secrets.invalidSecretName", name), nameof(name));
         return Path.Combine(_directory, name + ".bin");
     }
 }

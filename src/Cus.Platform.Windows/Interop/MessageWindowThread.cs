@@ -99,7 +99,7 @@ internal sealed unsafe class MessageWindowThread : IDisposable
             Handle = Native.CreateWindowExW(0, WindowClassName, "CUS", 0, 0, 0, 0, 0, Native.HWND_MESSAGE, 0, Native.GetModuleHandleW(null), 0);
             if (Handle == 0)
             {
-                _ready.SetException(new InvalidOperationException($"CreateWindowEx fallita ({Marshal.GetLastPInvokeError()})."));
+                _ready.SetException(new InvalidOperationException(Loc.T("clipboard.createwindowexFailed", Marshal.GetLastPInvokeError())));
                 return;
             }
 
@@ -172,7 +172,7 @@ internal sealed unsafe class MessageWindowThread : IDisposable
                 lpszClassName = name,
             };
             if (Native.RegisterClassExW(&wndClass) == 0)
-                throw new InvalidOperationException($"RegisterClassEx fallita ({Marshal.GetLastPInvokeError()}).");
+                throw new InvalidOperationException(Loc.T("clipboard.registerclassexFailed", Marshal.GetLastPInvokeError()));
         }
 
         return true;

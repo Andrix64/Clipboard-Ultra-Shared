@@ -18,4 +18,9 @@
     <InternalsVisibleTo Include="Cus.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
 </Project>

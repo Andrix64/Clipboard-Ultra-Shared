@@ -38,14 +38,14 @@ public sealed record ClipboardSummary(
     public static ClipboardSummary From(ClipboardContent content, string originDeviceId, string originName, bool isSensitive, bool isShared)
     {
         if (isSensitive)
-            return new(originDeviceId, originName, content.Kind, "contenuto sensibile", null, true, isShared);
+            return new(originDeviceId, originName, content.Kind, Loc.T("content.sensitiveContent"), null, true, isShared);
 
         var (title, size) = content.Kind switch
         {
-            ClipboardContentKind.Text => ($"testo di {(content.Text ?? "").Length:N0} caratteri", (long)System.Text.Encoding.UTF8.GetByteCount(content.Text ?? "")),
-            ClipboardContentKind.Image => ("immagine", (long)(content.ImagePng?.Length ?? 0)),
+            ClipboardContentKind.Text => (Loc.T("content.textOfCharacters", (content.Text ?? "").Length), (long)System.Text.Encoding.UTF8.GetByteCount(content.Text ?? "")),
+            ClipboardContentKind.Image => (Loc.T("content.image"), (long)(content.ImagePng?.Length ?? 0)),
             ClipboardContentKind.Files => (DescribeFiles(content.Files ?? []), content.Files?.Sum(f => f.SizeBytes) ?? 0),
-            _ => ("contenuto sconosciuto", 0L),
+            _ => (Loc.T("content.unknownContent2"), 0L),
         };
         return new(originDeviceId, originName, content.Kind, title, size, false, isShared);
     }
@@ -59,9 +59,9 @@ public sealed record ClipboardSummary(
         var roots = files.Select(f => f.Name.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         return roots.Count switch
         {
-            0 => "nessun file",
+            0 => Loc.T("common.noFiles"),
             1 => roots[0],
-            _ => $"{roots.Count} elementi",
+            _ => Loc.T("content.items", roots.Count),
         };
     }
 }

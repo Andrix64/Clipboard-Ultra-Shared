@@ -20,7 +20,7 @@
       <DockPanel>
         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
           <TextBlock DockPanel.Dock="Left" Text="CUS" FontSize="15" FontWeight="Black" FontStyle="Italic" Padding="0,0,4,0" Foreground="{x:Static ui:Skin.EngravingBrush}" />
-          <TextBlock DockPanel.Dock="Right" Classes="engraved" Text="MEMORIA" VerticalAlignment="Center" />
+          <TextBlock DockPanel.Dock="Right" Classes="engraved" Text="{ui:Tr main.memory}" VerticalAlignment="Center" />
           <ui:GripRidges Height="12" Margin="8,0,12,0" VerticalAlignment="Center" />
         </DockPanel>
         <DockPanel DockPanel.Dock="Top">
@@ -28,8 +28,8 @@
             <TextBlock Text="PASS · CLN-47" />
           </Border>
           <WrapPanel Orientation="Horizontal">
-            <Button x:Name="PageHistoryButton" Classes="pill page" Content="CRONOLOGIA" Margin="0,0,5,0" />
-            <Button x:Name="PageSettingsButton" Classes="pill page" Content="IMPOSTAZIONI" Margin="0,0,5,0" />
+            <Button x:Name="PageHistoryButton" Classes="pill page" Content="{ui:Tr main.history}" Margin="0,0,5,0" />
+            <Button x:Name="PageSettingsButton" Classes="pill page" Content="{ui:Tr main.settings}" Margin="0,0,5,0" />
             <Button x:Name="PageSimButton" Classes="pill page" Content="SIM" Margin="0,0,5,0" IsVisible="False" />
           </WrapPanel>
         </DockPanel>
@@ -39,13 +39,13 @@
             <DockPanel x:Name="HistoryPage">
               <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
-                  <Button x:Name="RefreshHistoryButton" Classes="pill" Content="AGGIORNA" />
-                  <Button x:Name="UseHistoryButton" Classes="pill" Content="COPIA" />
+                  <Button x:Name="RefreshHistoryButton" Classes="pill" Content="{ui:Tr main.refresh}" />
+                  <Button x:Name="UseHistoryButton" Classes="pill" Content="{ui:Tr main.copy}" />
                 </StackPanel>
-                <TextBlock x:Name="HistoryTitle" Classes="engraved" Text="ULTIME 20 COPIE (SUL PC DELL'HOST)" VerticalAlignment="Center" />
+                <TextBlock x:Name="HistoryTitle" Classes="engraved" Text="{ui:Tr main.lastCopiesOnTheHostS}" VerticalAlignment="Center" />
               </DockPanel>
               <ListBox x:Name="HistoryList" Classes="lcd"
-                       ToolTip.Tip="Doppio clic su una voce per leggerla per intero">
+                       ToolTip.Tip="{ui:Tr main.doubleClickAnEntryToRead}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="x:String">
                     <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" />
@@ -56,40 +56,46 @@
 
             <ScrollViewer x:Name="SettingsPage" IsVisible="False">
               <StackPanel Spacing="10" Margin="0,0,6,0">
-                <TextBlock Classes="engraved" Text="QUESTO PC" />
+                <TextBlock Classes="engraved" Text="{ui:Tr main.thisPc}" />
                 <TextBlock x:Name="IdentityText" Classes="lcd-dark" TextWrapping="Wrap" />
                 <TextBlock Classes="lcd-dark" FontSize="11" TextWrapping="Wrap"
-                           Text="NOME VISIBILE AGLI ALTRI (all'inizio è il nome del PC)" />
+                           Text="{ui:Tr main.nameShownToOthersInitiallyThe}" />
                 <DockPanel>
-                  <Button x:Name="RenameButton" DockPanel.Dock="Right" Classes="pill" Content="SALVA" Margin="6,0,0,0" />
+                  <Button x:Name="RenameButton" DockPanel.Dock="Right" Classes="pill" Content="{ui:Tr main.save}" Margin="6,0,0,0" />
                   <TextBox x:Name="NameInput" Classes="lcd" MaxLength="64" />
                 </DockPanel>
-                <TextBlock Classes="engraved" Text="ESECUZIONE" />
+                <TextBlock Classes="engraved" Text="{ui:Tr main.running}" />
                 <DockPanel>
                   <Button x:Name="BackgroundToggle" DockPanel.Dock="Right" Classes="pill page" Content="SÌ" MinWidth="54" Margin="8,0,0,0" />
                   <TextBlock Classes="lcd-dark" TextWrapping="Wrap" VerticalAlignment="Center"
-                             Text="Alla chiusura della finestra CUS resta attivo nell'area di notifica (in basso a destra)." />
+                             Text="{ui:Tr main.whenTheWindowIsClosedCus}" />
                 </DockPanel>
-                <TextBlock Classes="engraved" Text="DETTAGLI" />
+                <!-- I nomi delle lingue restano nella loro lingua: si riconoscono anche senza capire l'altra. -->
+                <TextBlock Classes="engraved" Text="{ui:Tr main.languageLingua}" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button x:Name="LanguageItalianButton" Classes="pill page" Content="ITALIANO" />
+                  <Button x:Name="LanguageEnglishButton" Classes="pill page" Content="ENGLISH" />
+                </StackPanel>
+                <TextBlock Classes="engraved" Text="{ui:Tr main.details}" />
                 <TextBlock x:Name="InfoText" Classes="lcd-dark" TextWrapping="Wrap" />
               </StackPanel>
             </ScrollViewer>
 
             <StackPanel x:Name="SimPage" IsVisible="False" Spacing="8">
               <TextBlock Classes="lcd-dark" TextWrapping="Wrap"
-                         Text="CLIPBOARD VIRTUALE: PER PROVARE PIÙ ISTANZE SULLO STESSO PC." />
+                         Text="{ui:Tr main.virtualClipboardForTestingSeveralInstances}" />
               <DockPanel>
-                <Button x:Name="SimCopyTextButton" DockPanel.Dock="Right" Classes="pill" Content="COPIA TESTO" Margin="6,0,0,0" />
-                <TextBox x:Name="SimTextInput" Classes="lcd" PlaceholderText="Testo da copiare" />
+                <Button x:Name="SimCopyTextButton" DockPanel.Dock="Right" Classes="pill" Content="{ui:Tr main.copyText}" Margin="6,0,0,0" />
+                <TextBox x:Name="SimTextInput" Classes="lcd" PlaceholderText="{ui:Tr main.textToCopy}" />
               </DockPanel>
               <WrapPanel>
-                <Button x:Name="SimCopySensitiveButton" Classes="pill" Content="COPIA COME PASSWORD" Margin="0,0,6,6" />
-                <Button x:Name="SimCopyFilesButton" Classes="pill" Content="COPIA FILE" Margin="0,0,6,6" />
-                <Button x:Name="SimCopyFolderButton" Classes="pill" Content="COPIA CARTELLA" Margin="0,0,6,6" />
-                <Button x:Name="SimPasteFilesButton" Classes="pill" Content="INCOLLA FILE IN..." Margin="0,0,6,6" />
+                <Button x:Name="SimCopySensitiveButton" Classes="pill" Content="{ui:Tr main.copyAsPassword}" Margin="0,0,6,6" />
+                <Button x:Name="SimCopyFilesButton" Classes="pill" Content="{ui:Tr main.copyFiles}" Margin="0,0,6,6" />
+                <Button x:Name="SimCopyFolderButton" Classes="pill" Content="{ui:Tr main.copyFolder}" Margin="0,0,6,6" />
+                <Button x:Name="SimPasteFilesButton" Classes="pill" Content="{ui:Tr main.pasteFilesInto}" Margin="0,0,6,6" />
               </WrapPanel>
-              <TextBlock Classes="engraved" Text="CONTENUTO ATTUALE" />
-              <TextBlock x:Name="SimCurrentText" Classes="lcd-dark" TextWrapping="Wrap" Text="(vuota)" />
+              <TextBlock Classes="engraved" Text="{ui:Tr main.currentContent}" />
+              <TextBlock x:Name="SimCurrentText" Classes="lcd-dark" TextWrapping="Wrap" Text="{ui:Tr common.empty}" />
             </StackPanel>
             <ui:CrtOverlay Margin="-8" Strength="0.5" />
           </Panel>
@@ -106,14 +112,14 @@
       <DockPanel>
         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
           <TextBlock DockPanel.Dock="Right" Text="CUS" FontSize="15" FontWeight="Black" FontStyle="Italic" Padding="0,0,4,0" Foreground="{x:Static ui:Skin.EngravingBrush}" />
-          <TextBlock DockPanel.Dock="Left" Classes="engraved" Text="CONTROLLO SESSIONE" VerticalAlignment="Center" />
+          <TextBlock DockPanel.Dock="Left" Classes="engraved" Text="{ui:Tr main.sessionControl}" VerticalAlignment="Center" />
           <ui:GripRidges Height="12" Margin="12,0,8,0" VerticalAlignment="Center" />
         </DockPanel>
         <DockPanel DockPanel.Dock="Top">
           <TextBlock DockPanel.Dock="Right" Classes="serial" Text="47-CLN" Margin="6,0,0,0" VerticalAlignment="Center" />
           <WrapPanel Orientation="Horizontal">
-            <Button x:Name="PageNetworkButton" Classes="pill page" Content="RETE" Margin="0,0,5,0" />
-            <Button x:Name="PageFriendsButton" Classes="pill page" Content="AMICI" Margin="0,0,5,0" />
+            <Button x:Name="PageNetworkButton" Classes="pill page" Content="{ui:Tr common.network}" Margin="0,0,5,0" />
+            <Button x:Name="PageFriendsButton" Classes="pill page" Content="{ui:Tr main.friends}" Margin="0,0,5,0" />
           </WrapPanel>
         </DockPanel>
 
@@ -122,15 +128,15 @@
             <!-- Nessuna sessione: offrirsi come host o cercare in rete -->
             <DockPanel x:Name="NetworkPage">
               <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button x:Name="OfferButton" DockPanel.Dock="Right" Classes="pill" Content="OFFRITI COME HOST"
-                        ToolTip.Tip="Diventi visibile in rete: gli altri possono chiederti di entrare e tu decidi per ognuno." />
-                <TextBlock Classes="engraved" Text="HOST IN RETE" VerticalAlignment="Center" />
+                <Button x:Name="OfferButton" DockPanel.Dock="Right" Classes="pill" Content="{ui:Tr main.offerAsHost}"
+                        ToolTip.Tip="{ui:Tr main.youBecomeVisibleOnTheNetwork}" />
+                <TextBlock Classes="engraved" Text="{ui:Tr main.hostsOnTheNetwork}" VerticalAlignment="Center" />
               </DockPanel>
               <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                <Button x:Name="AddPeerButton" DockPanel.Dock="Right" Classes="pill" Content="SALVA" Margin="6,0,0,0"
-                        ToolTip.Tip="Ricorda l'indirizzo nell'elenco" />
-                <Button x:Name="JoinAddressButton" DockPanel.Dock="Right" Classes="pill" Content="ENTRA" Margin="6,0,0,0" />
-                <TextBox x:Name="AddressInput" Classes="lcd" PlaceholderText="IP o nome host, porta opzionale" />
+                <Button x:Name="AddPeerButton" DockPanel.Dock="Right" Classes="pill" Content="{ui:Tr main.save}" Margin="6,0,0,0"
+                        ToolTip.Tip="{ui:Tr main.rememberTheAddressInTheList}" />
+                <Button x:Name="JoinAddressButton" DockPanel.Dock="Right" Classes="pill" Content="{ui:Tr common.join}" Margin="6,0,0,0" />
+                <TextBox x:Name="AddressInput" Classes="lcd" PlaceholderText="{ui:Tr main.ipOrHostNameOptionalPort}" />
               </DockPanel>
               <ScrollViewer>
                 <StackPanel x:Name="PeersPanel" Spacing="4" />
@@ -140,19 +146,19 @@
             <!-- In sessione: richieste, connessi e permessi -->
             <DockPanel x:Name="SessionPage" IsVisible="False">
               <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                <Button x:Name="VisibleToggle" Classes="pill page" Content="VISIBILE: SÌ" Margin="0,0,5,5"
-                        ToolTip.Tip="Acceso: gli altri ti vedono e possono chiedere di entrare. Spento: nessun altro può chiedere (chi è dentro resta)." />
-                <Button x:Name="SensitiveToggle" Classes="pill page" Content="••• PASSWORD A TUTTI" Margin="0,0,5,5"
-                        ToolTip.Tip="Solo per questa sessione: le password che copi arrivano a tutti. Spento: solo agli amici affidabili." />
-                <Button x:Name="TransfersButton" Classes="pill" Content="TRASFERIMENTI" Margin="0,0,5,5" IsVisible="False" />
-                <Button x:Name="LeaveButton" Classes="pill danger" Content="CHIUDI SESSIONE" Margin="0,0,5,5"
-                        ToolTip.Tip="Termina la sessione per tutti i connessi." />
+                <Button x:Name="VisibleToggle" Classes="pill page" Content="{ui:Tr main.visibleYes}" Margin="0,0,5,5"
+                        ToolTip.Tip="{ui:Tr main.onOthersSeeYouAndCan}" />
+                <Button x:Name="SensitiveToggle" Classes="pill page" Content="{ui:Tr main.passwordsToAll}" Margin="0,0,5,5"
+                        ToolTip.Tip="{ui:Tr main.thisSessionOnlyThePasswordsYou}" />
+                <Button x:Name="TransfersButton" Classes="pill" Content="{ui:Tr main.transfers}" Margin="0,0,5,5" IsVisible="False" />
+                <Button x:Name="LeaveButton" Classes="pill danger" Content="{ui:Tr main.endSession}" Margin="0,0,5,5"
+                        ToolTip.Tip="{ui:Tr main.endsTheSessionForEveryoneConnected}" />
               </WrapPanel>
               <ScrollViewer>
                 <StackPanel Spacing="4">
-                  <TextBlock x:Name="RequestsTitle" Classes="engraved" Text="RICHIESTE DI INGRESSO" />
+                  <TextBlock x:Name="RequestsTitle" Classes="engraved" Text="{ui:Tr main.joinRequests}" />
                   <StackPanel x:Name="RequestsPanel" Spacing="4" />
-                  <TextBlock Classes="engraved" Text="CONNESSI" Margin="0,6,0,0" />
+                  <TextBlock Classes="engraved" Text="{ui:Tr main.connected}" Margin="0,6,0,0" />
                   <StackPanel x:Name="ParticipantsPanel" Spacing="4" />
                 </StackPanel>
               </ScrollViewer>
@@ -182,8 +188,8 @@
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
             <ui:Lamp Width="16" Height="16" Color="#FF3B2B" Pulse="True" Margin="0,0,2,0" />
             <ui:Lamp Width="16" Height="16" Color="#E8EEF2" Margin="0,0,4,0" />
-            <Button x:Name="MinimizeButton" AutomationProperties.Name="Riduci" Classes="round small" ToolTip.Tip="Riduci a icona" />
-            <Button x:Name="CloseButton" AutomationProperties.Name="Chiudi" Classes="round small" ToolTip.Tip="Chiudi la finestra" />
+            <Button x:Name="MinimizeButton" AutomationProperties.Name="{ui:Tr main.minimize}" Classes="round small" ToolTip.Tip="{ui:Tr main.minimize2}" />
+            <Button x:Name="CloseButton" AutomationProperties.Name="{ui:Tr main.close}" Classes="round small" ToolTip.Tip="{ui:Tr main.closeTheWindow}" />
           </StackPanel>
           <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
             <TextBlock Text="CUS" FontSize="22" FontWeight="Black" FontStyle="Italic" Padding="0,0,5,0" Foreground="{x:Static ui:Skin.LimeTextBrush}" />
@@ -197,7 +203,7 @@
               <TextBlock x:Name="LcdPort" DockPanel.Dock="Right" Classes="lcd" FontSize="11" />
               <TextBlock x:Name="LcdDevice" Classes="lcd" FontSize="11" TextTrimming="CharacterEllipsis" />
             </DockPanel>
-            <TextBlock x:Name="LcdState" Grid.Row="1" Classes="lcd" FontSize="30" FontWeight="Bold" VerticalAlignment="Center" Text="IN ATTESA" />
+            <TextBlock x:Name="LcdState" Grid.Row="1" Classes="lcd" FontSize="30" FontWeight="Bold" VerticalAlignment="Center" Text="{ui:Tr common.waiting}" />
             <TextBlock x:Name="LcdParticipants" Grid.Row="2" Classes="lcd" FontSize="12" TextTrimming="CharacterEllipsis" />
             <DockPanel Grid.Row="3">
               <TextBlock x:Name="LcdCurrentSize" DockPanel.Dock="Right" Classes="lcd" FontSize="12" FontWeight="Bold" Margin="8,0,0,0" />

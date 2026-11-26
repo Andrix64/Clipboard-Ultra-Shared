@@ -54,13 +54,13 @@ public static class ClipboardFileNames
         reason = "";
         if (files is not { Count: > 0 })
         {
-            reason = "nessun file";
+            reason = Loc.T("common.noFiles");
             return false;
         }
 
         if (files.Count > MaxFiles)
         {
-            reason = $"troppi file (oltre {MaxFiles:N0})";
+            reason = Loc.T("fileNames.tooManyFilesOver", MaxFiles);
             return false;
         }
 
@@ -71,15 +71,15 @@ public static class ClipboardFileNames
         {
             if (file is null || !TryValidateName(file.Name, out reason))
             {
-                reason = file is null ? "voce di file vuota" : reason;
+                reason = file is null ? Loc.T("fileNames.emptyFileEntry") : reason;
                 return false;
             }
 
             if (file.SizeBytes < 0 || file.SizeBytes > MaxTotalBytes - totalBytes)
             {
                 reason = file.SizeBytes < 0
-                    ? $"dimensione non valida per '{DisplayText.Sanitize(file.Name, 80, "?")}'"
-                    : $"dimensione totale dichiarata troppo grande (oltre {MaxTotalBytes / (1L << 30):N0} GB)";
+                    ? Loc.T("fileNames.invalidSizeFor", DisplayText.Sanitize(file.Name, 80, "?"))
+                    : Loc.T("fileNames.declaredTotalSizeTooLargeOver", MaxTotalBytes / (1L << 30));
                 return false;
             }
 
@@ -89,7 +89,7 @@ public static class ClipboardFileNames
             {
                 if (file.SizeBytes != 0 || filePaths.Contains(file.Name))
                 {
-                    reason = $"cartella non valida: '{DisplayText.Sanitize(file.Name, 80, "?")}'";
+                    reason = Loc.T("fileNames.invalidFolder", DisplayText.Sanitize(file.Name, 80, "?"));
                     return false;
                 }
 
@@ -98,7 +98,7 @@ public static class ClipboardFileNames
             }
             else if (directories.Contains(file.Name) || !filePaths.Add(file.Name))
             {
-                reason = $"nome ripetuto: '{file.Name}'";
+                reason = Loc.T("fileNames.duplicateName", file.Name);
                 return false;
             }
 
@@ -107,7 +107,7 @@ public static class ClipboardFileNames
                 var directory = file.Name[..slash];
                 if (filePaths.Contains(directory))
                 {
-                    reason = $"'{directory}' è sia un file sia una cartella";
+                    reason = Loc.T("fileNames.isBothAFileAndA", directory);
                     return false;
                 }
 
@@ -116,7 +116,7 @@ public static class ClipboardFileNames
 
             if (filePaths.Count + directories.Count > MaxEntries)
             {
-                reason = $"troppe voci tra file e cartelle (oltre {MaxEntries:N0})";
+                reason = Loc.T("fileNames.tooManyFilesAndFoldersOver", MaxEntries);
                 return false;
             }
         }
@@ -142,20 +142,20 @@ public static class ClipboardFileNames
         reason = "";
         if (string.IsNullOrEmpty(name))
         {
-            reason = "nome di file vuoto";
+            reason = Loc.T("fileNames.emptyFileName");
             return false;
         }
 
         if (name.Length > MaxPathLength)
         {
-            reason = $"percorso troppo lungo (oltre {MaxPathLength} caratteri)";
+            reason = Loc.T("fileNames.pathTooLongOverCharacters", MaxPathLength);
             return false;
         }
 
         var segments = name.Split('/');
         if (segments.Length > MaxDepth)
         {
-            reason = $"troppi livelli di cartelle (oltre {MaxDepth})";
+            reason = Loc.T("fileNames.tooManyFolderLevelsOver", MaxDepth);
             return false;
         }
 
@@ -163,7 +163,7 @@ public static class ClipboardFileNames
         {
             if (!IsValidSegment(segment))
             {
-                reason = $"nome di file non valido: '{DisplayText.Sanitize(name, 80, "?")}'";
+                reason = Loc.T("fileNames.invalidFileName", DisplayText.Sanitize(name, 80, "?"));
                 return false;
             }
         }

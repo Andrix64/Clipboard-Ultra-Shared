@@ -28,20 +28,21 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         // Nomi e impronta arrivano dal peer: niente caratteri di controllo o bidi che falsino il testo.
         var name = DisplayText.Sanitize(request.RequesterName, MaxNameLength);
         var user = DisplayText.Sanitize(request.RequesterUserName, MaxNameLength);
-        var fingerprint = DisplayText.Sanitize(request.RequesterFingerprint, 128, "(impronta non disponibile)");
+        var fingerprint = DisplayText.Sanitize(request.RequesterFingerprint, 128, Loc.T("consent.fingerprintUnavailable"));
         // Un nome uguale a quello di un amico non lo rende un amico: lo si dice prima di tutto il resto.
         var warning = request.LooksLikeFriend is { } imitated
-            ? $"ATTENZIONE: non è il tuo amico {DisplayText.Sanitize(imitated, MaxNameLength)}, anche se si chiama come lui: è un altro PC. "
+            ? Loc.T("consent.warningThisIsNotYourFriend", DisplayText.Sanitize(imitated, MaxNameLength))
             : "";
         return Show(
-            "CUS — richiesta di ingresso",
-            request.LooksLikeFriend is null ? "RICHIESTA DI INGRESSO" : $"{Icons.Warning} RICHIESTA DI INGRESSO · NOME DI UN AMICO",
-            $"{name} chiede di entrare nella tua condivisione.",
-            warning + "Chi entra riceve ciò che si copia nella sessione. In bidirezionale anche ciò che copia lui arriva a tutti; "
-                + "in sola lettura le sue copie restano sul suo PC. Potrai cambiarlo dall'elenco dei connessi.",
+            Loc.T("consent.cusJoinRequest"),
+            request.LooksLikeFriend is null
+                ? Loc.T("consent.joinRequest")
+                : Loc.T("consent.joinRequestAFriendSName", Icons.Warning),
+            Loc.T("consent.isAskingToJoinYourShare", name),
+            warning + Loc.T("consent.whoeverJoinsReceivesWhatIsCopied"),
             user,
             fingerprint,
-            [(Icons.Xmark, "rifiuta", ConsentDecision.Reject), (Icons.ArrowDown, "sola lettura", ConsentDecision.AcceptReadOnly), (Icons.Bidirectional, "bidirezionale", ConsentDecision.Accept)],
+            [(Icons.Xmark, Loc.T("consent.reject"), ConsentDecision.Reject), (Icons.ArrowDown, Loc.T("common.readOnly"), ConsentDecision.AcceptReadOnly), (Icons.Bidirectional, Loc.T("common.twoWay"), ConsentDecision.Accept)],
             ConsentDecision.Reject,
             cancellationToken);
     }
@@ -49,18 +50,18 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
     public Task<bool> AskAgreementAsync(AgreementRequest request, CancellationToken cancellationToken)
     {
         var name = DisplayText.Sanitize(request.HostName, MaxNameLength);
-        var fingerprint = DisplayText.Sanitize(request.HostFingerprint, 128, "(impronta non disponibile)");
+        var fingerprint = DisplayText.Sanitize(request.HostFingerprint, 128, Loc.T("consent.fingerprintUnavailable"));
         var what = request.Level == AgreementLevel.Anytime
-            ? "potrete collegarvi l'uno all'altro in qualsiasi momento, anche senza offrirvi come host, senza conferma"
-            : "potrete entrare l'uno nella condivisione dell'altro senza conferma, quando l'altro si offre come host";
+            ? Loc.T("consent.youCanConnectToEachOther")
+            : Loc.T("consent.youCanJoinEachOtherS");
         return Show(
-            "CUS — proposta di patto",
-            $"PATTO · {CusNode.DescribeAgreement(request.Level).ToUpperInvariant()}",
-            $"{name} ti propone un patto.",
-            $"Se accetti, {what}. Il patto vale nei due sensi e cade per entrambi appena uno dei due lo scioglie (scheda AMICI).",
+            Loc.T("consent.cusPactProposal"),
+            Loc.T("consent.pact", CusNode.DescribeAgreement(request.Level).ToUpperInvariant()),
+            Loc.T("consent.isProposingAPact", name),
+            Loc.T("consent.ifYouAcceptThePactWorks", what),
             "",
             fingerprint,
-            [(Icons.Xmark, "rifiuta", false), (Icons.Check, "accetta", true)],
+            [(Icons.Xmark, Loc.T("consent.reject"), false), (Icons.Check, Loc.T("consent.accept"), true)],
             false,
             cancellationToken);
     }
@@ -159,8 +160,8 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             },
         };
         if (user.Length > 0)
-            lines.Children.Add(Skin.LcdText($"UTENTE {user}", 11));
-        lines.Children.Add(Skin.LcdText("IMPRONTA (confrontala con quella mostrata sull'altro PC)", 11));
+            lines.Children.Add(Skin.LcdText(Loc.T("consent.user", user), 11));
+        lines.Children.Add(Skin.LcdText(Loc.T("consent.fingerprintCompareItWithTheOne"), 11));
         lines.Children.Add(Skin.LcdText(fingerprint, 15, bold: true));
         var lcd = Skin.Lcd(lines);
         lcd.Padding = new Thickness(14, 10);

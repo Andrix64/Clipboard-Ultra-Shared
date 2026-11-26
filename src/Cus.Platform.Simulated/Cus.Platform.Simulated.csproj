@@ -11,4 +11,9 @@
     <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
 </Project>

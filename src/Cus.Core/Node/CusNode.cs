@@ -233,6 +233,17 @@ public sealed partial class CusNode : IAsyncDisposable
         set => _database.SetSetting("ui/run-in-background", value ? "1" : "0");
     }
 
+    /// <summary>Lingua dell'interfaccia scelta dall'utente; null se non l'ha mai scelta (vale quella dell'installer).</summary>
+    public AppLanguage? SavedLanguage
+    {
+        get => Loc.Parse(_database.GetSetting(Loc.SettingKey));
+        set
+        {
+            if (value is { } language)
+                _database.SetSetting(Loc.SettingKey, Loc.ToCode(language));
+        }
+    }
+
     /// <summary>Crea o carica l'identità del profilo.</summary>
     public static DeviceIdentity LoadOrCreateIdentity(CusDatabase database, string displayName, string userName)
     {
@@ -263,14 +274,14 @@ public sealed partial class CusNode : IAsyncDisposable
             catch (SocketException ex)
             {
                 _discovery = null;
-                _notifier.Error($"Scoperta automatica non disponibile ({ex.Message}). Usa l'IP o il nome host a mano.");
+                _notifier.Error(Loc.T("node.automaticDiscoveryUnavailableEnterTheIp", ex.Message));
             }
         }
 
         RunInBackground(ProcessLocalChangesAsync);
         RunInBackground(WatchTransfersAsync);
         _monitor.Start();
-        Log($"In ascolto sulla porta {Port}.");
+        Log(Loc.T("node.listeningOnPort", Port));
         await Task.CompletedTask;
     }
 
@@ -299,7 +310,7 @@ public sealed partial class CusNode : IAsyncDisposable
         if (_discovery is not null)
             await _discovery.DisposeAsync();
         foreach (var connection in _connections.Keys)
-            connection.Close("chiusura di CUS");
+            connection.Close(Loc.T("node.cusIsClosing"));
         if (_acceptLoop is not null)
         {
             try { await _acceptLoop; }
@@ -387,7 +398,7 @@ public sealed partial class CusNode : IAsyncDisposable
         }
 
         throw new CusOperationException(
-            $"Nessuna porta libera tra {NetworkDefaults.DefaultPort} e {NetworkDefaults.PortRangeEnd}. Chiudi altre istanze di CUS o usa --port.");
+            Loc.T("node.noFreePortBetweenAndClose", NetworkDefaults.DefaultPort, NetworkDefaults.PortRangeEnd));
     }
 
     private async Task AcceptLoopAsync()
@@ -501,7 +512,7 @@ public sealed partial class CusNode : IAsyncDisposable
         }
         catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException or ProtocolException)
         {
-            throw new CusOperationException($"Impossibile collegarsi a {new PeerEndpoint(host, port)}: {Describe(ex)}", ex);
+            throw new CusOperationException(Loc.T("node.canTConnectTo", new PeerEndpoint(host, port), Describe(ex)), ex);
         }
 
         try
@@ -510,8 +521,8 @@ public sealed partial class CusNode : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not CusOperationException)
         {
-            connection.Close("errore iniziale");
-            throw new CusOperationException($"Collegamento con {new PeerEndpoint(host, port)} non riuscito: {Describe(ex)}", ex);
+            connection.Close(Loc.T("node.initialError"));
+            throw new CusOperationException(Loc.T("node.connectionToFailed", new PeerEndpoint(host, port), Describe(ex)), ex);
         }
     }
 
@@ -532,7 +543,7 @@ public sealed partial class CusNode : IAsyncDisposable
                     break;
                 default:
                     // Connessione di sola sincronizzazione del patto (o saluto): si chiude.
-                    connection.Close("fine");
+                    connection.Close(Loc.T("node.end"));
                     break;
             }
         }
@@ -619,7 +630,7 @@ public sealed partial class CusNode : IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    _notifier.Error($"Copia non condivisa: {ex.Message}");
+                    _notifier.Error(Loc.T("common.copyNotShared", ex.Message));
                 }
             }
         }
@@ -645,7 +656,7 @@ public sealed partial class CusNode : IAsyncDisposable
             {
                 ReleaseFileRead(connection);
                 RunInBackground(() => SendFileReadReplyAsync(connection,
-                    new FileReadReplyMessage(read.RequestId, null, "Il PC d'origine è occupato a servire altre letture: riprova.")));
+                    new FileReadReplyMessage(read.RequestId, null, WireTexts.OriginBusy.Text)));
                 return true;
             }
 
@@ -710,9 +721,9 @@ public sealed partial class CusNode : IAsyncDisposable
 
     private static string Describe(Exception ex) => ex switch
     {
-        SocketException { SocketErrorCode: SocketError.ConnectionRefused } => "connessione rifiutata (CUS non è in ascolto su quella porta)",
-        SocketException { SocketErrorCode: SocketError.TimedOut } or OperationCanceledException => "nessuna risposta entro il tempo massimo",
-        SocketException { SocketErrorCode: SocketError.HostNotFound } => "nome host sconosciuto",
+        SocketException { SocketErrorCode: SocketError.ConnectionRefused } => Loc.T("node.connectionRefusedCusIsnTListening"),
+        SocketException { SocketErrorCode: SocketError.TimedOut } or OperationCanceledException => Loc.T("node.noAnswerWithinTheTimeLimit"),
+        SocketException { SocketErrorCode: SocketError.HostNotFound } => Loc.T("node.unknownHostName"),
         _ => ex.Message,
     };
 

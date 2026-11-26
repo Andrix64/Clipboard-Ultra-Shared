@@ -21,6 +21,10 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Prima di tutto la lingua predefinita (installer, altrimenti Windows): serve già per gli errori d'avvio.
+        // Quella scelta dall'utente, salvata nel profilo, si applica appena il database è aperto.
+        Loc.Current = Loc.DefaultLanguage(AppContext.BaseDirectory);
+
         var model = Compose(args);
         if (model is null)
             return 0; // Già aperto: la prima istanza è stata portata in primo piano, questa esce in silenzio.
@@ -46,7 +50,7 @@ internal static class Program
         }
         catch (ArgumentException ex)
         {
-            return Failed("CUS — errore", ex.Message);
+            return Failed(Loc.T("startup.cusError"), ex.Message);
         }
 
         // Un profilo per volta: due istanze sullo stesso DB si contenderebbero identità e porta.
@@ -65,14 +69,25 @@ internal static class Program
         ListenForActivation(activateName);
 
         var paths = new ProfileAppPaths(options.Profile);
-        var info = new List<string>
+        int? port = null;
+        IReadOnlyList<string> Info()
         {
-            $"Profilo: {options.Profile}",
-            $"Cartella dati: {paths.DataDirectory}",
-            $"Clipboard: {(options.ClipboardMode == ClipboardMode.Simulated ? "simulata" : "di sistema")}",
-            $"Ascolto su: {options.BindAddress}",
-            $"Scoperta automatica: {(options.EnableDiscovery ? "attiva" : "disattivata")}",
-        };
+            var lines = new List<string>
+            {
+                Loc.T("startup.profile", options.Profile),
+                Loc.T("startup.dataFolder", paths.DataDirectory),
+                options.ClipboardMode == ClipboardMode.Simulated
+                    ? Loc.T("startup.clipboardSimulated")
+                    : Loc.T("startup.clipboardSystem"),
+                Loc.T("startup.listeningOn", options.BindAddress),
+                options.EnableDiscovery
+                    ? Loc.T("startup.automaticDiscoveryOn")
+                    : Loc.T("startup.automaticDiscoveryOff"),
+            };
+            if (port is { } p)
+                lines.Add(Loc.T("startup.tcpPort", p));
+            return lines;
+        }
 
         CusDatabase database;
         try
@@ -82,8 +97,12 @@ internal static class Program
         catch (Exception ex)
         {
             mutex.ReleaseMutex();
-            return Failed("CUS — errore", $"Impossibile aprire il database cifrato del profilo: {ex.Message}");
+            return Failed(Loc.T("startup.cusError"), Loc.T("startup.cannotOpenTheProfileSEncrypted", ex.Message));
         }
+
+        // Lingua: quella scelta nelle impostazioni del profilo; se mai scelta, quella dell'installer.
+        if (Loc.Parse(database.GetSetting(Loc.SettingKey)) is { } saved)
+            Loc.Current = saved;
 
         var defaultName = options.Profile == CusOptions.DefaultProfile ? Environment.MachineName : $"{Environment.MachineName} ({options.Profile})";
         var identity = CusNode.LoadOrCreateIdentity(database, options.DisplayName ?? defaultName, Environment.UserName);
@@ -151,15 +170,15 @@ internal static class Program
         {
             Shutdown().GetAwaiter().GetResult();
             mutex.ReleaseMutex();
-            return Failed($"CUS — {options.Profile}", $"Avvio non riuscito: {ex.Message}");
+            return Failed($"CUS — {options.Profile}", Loc.T("startup.startupFailed", ex.Message));
         }
 
-        info.Add($"Porta TCP: {node.Port}");
+        port = node.Port;
 
         return new MainWindowModel
         {
             Title = $"CUS — {identity.DisplayName}",
-            InfoLines = info,
+            InfoLines = Info,
             Node = node,
             Notifier = notifier,
             Simulation = simulation,

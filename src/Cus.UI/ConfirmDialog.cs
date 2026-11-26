@@ -30,7 +30,7 @@ public static class ConfirmDialog
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
         };
 
-        var cancel = Skin.Pill("ANNULLA");
+        var cancel = Skin.Pill(Loc.T("common.cancel"));
         cancel.IsDefault = true;
         cancel.IsCancel = true;
         cancel.Click += (_, _) => window.Close();

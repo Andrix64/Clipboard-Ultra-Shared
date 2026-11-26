@@ -104,9 +104,9 @@ public sealed class SecureChannel : IAsyncDisposable
             // dichiara 8 MB non deve far allocare 8 MB a chiunque si colleghi.
             var peerHello = await ReadFrameAsync(stream, HelloBytes, cancellationToken);
             if (peerHello.Length != hello.Length || !peerHello.AsSpan(0, 4).SequenceEqual(Magic))
-                throw new ProtocolException("L'altra parte non parla il protocollo CUS.");
+                throw new ProtocolException(Loc.T("net.theOtherSideDoesnTSpeak"));
             if (peerHello[4] != Version)
-                throw new ProtocolException($"Versione di protocollo non supportata: {peerHello[4]} (questa è la {Version}). Aggiorna CUS su entrambi i PC.");
+                throw new ProtocolException(Loc.T("net.unsupportedProtocolVersionThisOneIs", peerHello[4], Version));
             var peerEphemeral = peerHello.AsSpan(5, Sodium.KxPublicKeyBytes).ToArray();
 
             var (clientEph, serverEph) = isInitiator ? (ephemeralPk, peerEphemeral) : (peerEphemeral, ephemeralPk);
@@ -121,7 +121,7 @@ public sealed class SecureChannel : IAsyncDisposable
             await WriteFrameAsync(stream, Sodium.SecretStreamInitPush(sendState, sendKey), cancellationToken);
             var peerHeader = await ReadFrameAsync(stream, Sodium.SecretStreamHeaderBytes, cancellationToken);
             if (peerHeader.Length != Sodium.SecretStreamHeaderBytes)
-                throw new ProtocolException("Header del canale cifrato non valido.");
+                throw new ProtocolException(Loc.T("net.invalidEncryptedChannelHeader"));
             Sodium.SecretStreamInitPull(receiveState, peerHeader, receiveKey);
             CryptographicOperations.ZeroMemory(sendKey);
             CryptographicOperations.ZeroMemory(receiveKey);
@@ -143,32 +143,32 @@ public sealed class SecureChannel : IAsyncDisposable
                     [.. identity.SignPublicKey, .. identity.Sign(AuthPayload((byte)'C', clientTranscript(identity.SignPublicKey)))], cancellationToken);
                 var reply = await ReceiveSealedAsync(stream, receiveState, ResponderAuthBytes, cancellationToken);
                 if (reply is [Refused])
-                    throw new HandshakeRefusedException("L'altro PC non accetta connessioni da questo dispositivo in questo momento.");
+                    throw new HandshakeRefusedException(Loc.T("net.theOtherPcIsnTAccepting"));
                 if (reply.Length != ResponderAuthBytes || reply[0] != Accepted)
-                    throw new ProtocolException("Risposta dell'handshake non valida.");
+                    throw new ProtocolException(Loc.T("net.invalidHandshakeReply"));
                 peerIdentity = reply.AsSpan(1, Sodium.SignPublicKeyBytes).ToArray();
                 if (peerIdentity.AsSpan().SequenceEqual(identity.SignPublicKey))
-                    throw new ProtocolException("Connessione verso sé stessi.");
+                    throw new ProtocolException(Loc.T("net.connectionToItself"));
                 var signature = reply.AsSpan(1 + Sodium.SignPublicKeyBytes).ToArray();
                 if (!DeviceIdentity.Verify(signature, AuthPayload((byte)'S', serverTranscript(identity.SignPublicKey, peerIdentity)), peerIdentity))
-                    throw new ProtocolException("Firma dell'handshake non valida: l'altra parte non possiede la chiave che dichiara.");
+                    throw new ProtocolException(Loc.T("net.invalidHandshakeSignatureTheOtherSide"));
             }
             else
             {
                 var claim = await ReceiveSealedAsync(stream, receiveState, ClientAuthBytes, cancellationToken);
                 if (claim.Length != ClientAuthBytes)
-                    throw new ProtocolException("Identità dell'handshake non valida.");
+                    throw new ProtocolException(Loc.T("net.invalidHandshakeIdentity"));
                 peerIdentity = claim.AsSpan(0, Sodium.SignPublicKeyBytes).ToArray();
                 if (peerIdentity.AsSpan().SequenceEqual(identity.SignPublicKey))
-                    throw new ProtocolException("Connessione verso sé stessi.");
+                    throw new ProtocolException(Loc.T("net.connectionToItself"));
                 var signature = claim.AsSpan(Sodium.SignPublicKeyBytes).ToArray();
                 if (!DeviceIdentity.Verify(signature, AuthPayload((byte)'C', clientTranscript(peerIdentity)), peerIdentity))
-                    throw new ProtocolException("Firma dell'handshake non valida: l'altra parte non possiede la chiave che dichiara.");
+                    throw new ProtocolException(Loc.T("net.invalidHandshakeSignatureTheOtherSide"));
 
                 if (revealTo is not null && !revealTo(DeviceIdentity.ComputeDeviceId(peerIdentity)))
                 {
                     await SendSealedAsync(stream, sendState, [Refused], cancellationToken);
-                    throw new HandshakeRefusedException("Connessione non accettata: dispositivo sconosciuto mentre questo PC è nascosto.");
+                    throw new HandshakeRefusedException(Loc.T("net.connectionNotAcceptedUnknownDeviceWhile"));
                 }
 
                 await SendSealedAsync(stream, sendState,
@@ -197,7 +197,7 @@ public sealed class SecureChannel : IAsyncDisposable
     {
         var ciphertext = await ReadFrameAsync(stream, maxMessageBytes + Sodium.SecretStreamABytes, cancellationToken);
         if (!Sodium.SecretStreamPull(state, ciphertext, out var message))
-            throw new ProtocolException("Messaggio dell'handshake alterato.");
+            throw new ProtocolException(Loc.T("net.tamperedHandshakeMessage"));
         return message;
     }
 
@@ -207,7 +207,7 @@ public sealed class SecureChannel : IAsyncDisposable
         // Il controllo va fatto prima di cifrare: secretstream avanza lo stato a ogni push, e un
         // messaggio cifrato ma non inviato renderebbe indecifrabili tutti i successivi.
         if (message.Length > MaxMessageBytes)
-            throw new MessageTooLargeException($"Messaggio troppo grande ({message.Length:N0} byte, massimo {MaxMessageBytes:N0}).");
+            throw new MessageTooLargeException(Loc.T("net.messageTooLargeBytesMaximum", message.Length, MaxMessageBytes));
 
         await _sendLock.WaitAsync(cancellationToken);
         try
@@ -232,7 +232,7 @@ public sealed class SecureChannel : IAsyncDisposable
             var limit = Math.Min(maxMessageBytes, MaxMessageBytes) + Sodium.SecretStreamABytes;
             var ciphertext = await ReadFrameAsync(_stream, limit, cancellationToken);
             if (!Sodium.SecretStreamPull(_receiveState, ciphertext, out var message))
-                throw new ProtocolException("Messaggio alterato o fuori ordine.");
+                throw new ProtocolException(Loc.T("net.messageTamperedWithOrOutOf"));
             return message;
         }
         finally
@@ -253,7 +253,7 @@ public sealed class SecureChannel : IAsyncDisposable
     private static async Task WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         if (payload.Length > MaxFrameBytes)
-            throw new ProtocolException("Messaggio troppo grande.");
+            throw new ProtocolException(Loc.T("net.messageTooLarge"));
         var frame = new byte[4 + payload.Length];
         BinaryPrimitives.WriteInt32BigEndian(frame, payload.Length);
         payload.CopyTo(frame.AsMemory(4));
@@ -267,7 +267,7 @@ public sealed class SecureChannel : IAsyncDisposable
         await stream.ReadExactlyAsync(header, cancellationToken);
         var length = BinaryPrimitives.ReadInt32BigEndian(header);
         if (length < 0 || length > maxLength)
-            throw new ProtocolException($"Lunghezza di messaggio non valida: {length}.");
+            throw new ProtocolException(Loc.T("net.invalidMessageLength", length));
         var payload = new byte[length];
         await stream.ReadExactlyAsync(payload, cancellationToken);
         return payload;

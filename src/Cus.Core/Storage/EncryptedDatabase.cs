@@ -15,7 +15,7 @@ public static class EncryptedDatabase
     public static SqliteConnection Open(string path, ReadOnlySpan<byte> key)
     {
         if (key.Length < 32)
-            throw new ArgumentException("La chiave del DB deve essere di almeno 32 byte.", nameof(key));
+            throw new ArgumentException(Loc.T("storage.theDbKeyMustBeAt"), nameof(key));
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (directory is not null)

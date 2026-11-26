@@ -24,7 +24,7 @@ public sealed class TransfersWindow : Window
     private TransfersWindow(CusNode node)
     {
         _node = node;
-        Title = "CUS — trasferimenti";
+        Title = Loc.T("transfersWindow.cusTransfers");
         Icon = Skin.AppIcon;
         Width = 460;
         SizeToContent = SizeToContent.Height;
@@ -35,12 +35,12 @@ public sealed class TransfersWindow : Window
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        var close = Skin.Pill("CHIUDI");
+        var close = Skin.Pill(Loc.T("common.close"));
         close.IsCancel = true;
         close.Click += (_, _) => Close();
         DockPanel.SetDock(close, Dock.Right);
 
-        var heading = Skin.LcdText($"{Icons.Transfers} TRASFERIMENTI DEI TUOI FILE", 13, bold: true, dark: true);
+        var heading = Skin.LcdText(Loc.T("transfersWindow.transfersOfYourFiles", Icons.Transfers), 13, bold: true, dark: true);
         heading.TextWrapping = TextWrapping.NoWrap;
         heading.VerticalAlignment = VerticalAlignment.Center;
 
@@ -104,7 +104,7 @@ public sealed class TransfersWindow : Window
         _rows.Children.Clear();
         if (transfers.Count == 0)
         {
-            _rows.Children.Add(Skin.LcdText("Nessuna copia dei tuoi file in corso.", 12, dark: true));
+            _rows.Children.Add(Skin.LcdText(Loc.T("transfersWindow.noCopiesOfYourFilesIn"), 12, dark: true));
             return;
         }
 
@@ -117,14 +117,14 @@ public sealed class TransfersWindow : Window
         var state = transfer.State switch
         {
             TransferState.Active => $"{transfer.Progress:P0}",
-            TransferState.Completed => "COMPLETATO",
-            TransferState.Cancelled => "ANNULLATO",
-            _ => "FERMO",
+            TransferState.Completed => Loc.T("transfersWindow.completed"),
+            TransferState.Cancelled => Loc.T("transfersWindow.cancelled"),
+            _ => Loc.T("transfersWindow.stopped"),
         };
         var name = Skin.LcdText($"{DisplayText.MiddleEllipsis(DisplayText.Sanitize(transfer.ItemName, 260), 34)}", 12, bold: true, dark: true);
         name.TextWrapping = TextWrapping.NoWrap;
         var detail = Skin.LcdText(
-            $"{Icons.ArrowRight} {DisplayText.Sanitize(transfer.RequesterName, 64)} · {DisplayText.FormatSize(transfer.BytesDone)} di {DisplayText.FormatSize(transfer.TotalBytes)} · {state}",
+            $"{Icons.ArrowRight} {DisplayText.Sanitize(transfer.RequesterName, 64)} · {DisplayText.FormatSize(transfer.BytesDone)} {Loc.T("transfersWindow.of")} {DisplayText.FormatSize(transfer.TotalBytes)} · {state}",
             11, dark: true);
 
         var bar = new ProgressBar
@@ -142,7 +142,7 @@ public sealed class TransfersWindow : Window
         var row = new DockPanel { Margin = new Thickness(0, 2) };
         if (transfer.State == TransferState.Active)
         {
-            var cancel = Skin.Pill("ANNULLA");
+            var cancel = Skin.Pill(Loc.T("common.cancel"));
             cancel.Margin = new Thickness(10, 0, 0, 0);
             cancel.VerticalAlignment = VerticalAlignment.Center;
             cancel.Click += (_, _) =>

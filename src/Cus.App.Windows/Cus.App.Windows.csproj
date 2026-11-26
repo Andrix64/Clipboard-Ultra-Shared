@@ -23,4 +23,9 @@
     <ProjectReference Include="..\Cus.Platform.Simulated\Cus.Platform.Simulated.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
 </Project>

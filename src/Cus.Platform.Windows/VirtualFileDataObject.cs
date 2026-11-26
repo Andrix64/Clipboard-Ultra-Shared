@@ -44,7 +44,7 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(formats);
         if (!ClipboardFileNames.TryValidate(files, out var reason))
-            throw new ArgumentException($"Elenco di file ricevuto non valido: {reason}.", nameof(files));
+            throw new ArgumentException(Loc.T("clipboard.invalidFileListReceived", reason), nameof(files));
         _source = source;
         _formats = formats;
         _entries = BuildEntries(files);
@@ -105,11 +105,11 @@ internal sealed class VirtualFileDataObject : ComIDataObject
             return;
         }
 
-        throw new COMException("Formato non disponibile.", DV_E_FORMATETC);
+        throw new COMException(Loc.T("clipboard.formatNotAvailable"), DV_E_FORMATETC);
     }
 
     public void GetDataHere(ref FORMATETC format, ref STGMEDIUM medium) =>
-        throw new COMException("Non supportato.", E_NOTIMPL);
+        throw new COMException(Loc.T("clipboard.notSupported"), E_NOTIMPL);
 
     public int QueryGetData(ref FORMATETC format)
     {
@@ -136,7 +136,7 @@ internal sealed class VirtualFileDataObject : ComIDataObject
     public IEnumFORMATETC EnumFormatEtc(DATADIR direction)
     {
         if (direction != DATADIR.DATADIR_GET)
-            throw new COMException("Non supportato.", E_NOTIMPL);
+            throw new COMException(Loc.T("clipboard.notSupported"), E_NOTIMPL);
 
         var formats = SupportedHGlobalFormats()
             .Select(cf => new FORMATETC { cfFormat = (short)cf, dwAspect = DVASPECT.DVASPECT_CONTENT, lindex = -1, tymed = TYMED.TYMED_HGLOBAL })
@@ -151,7 +151,7 @@ internal sealed class VirtualFileDataObject : ComIDataObject
         return OLE_E_ADVISENOTSUPPORTED;
     }
 
-    public void DUnadvise(int connection) => throw new COMException("Non supportato.", OLE_E_ADVISENOTSUPPORTED);
+    public void DUnadvise(int connection) => throw new COMException(Loc.T("clipboard.notSupported"), OLE_E_ADVISENOTSUPPORTED);
 
     public int EnumDAdvise(out IEnumSTATDATA? enumAdvise)
     {
@@ -176,7 +176,7 @@ internal sealed class VirtualFileDataObject : ComIDataObject
             // cFileName è WCHAR[260] con il terminatore: i nomi sono già validati entro 259 caratteri.
             // Un nome più lungo è un errore e non si tronca (cambierebbe il file creato).
             if (entry.Name.Length > ClipboardFileNames.MaxPathLength)
-                throw new InvalidOperationException($"Nome troppo lungo per il descrittore: {entry.Name.Length} caratteri.");
+                throw new InvalidOperationException(Loc.T("clipboard.nameTooLongForTheDescriptor", entry.Name.Length));
             Encoding.Unicode.GetBytes(entry.Name, buffer.AsSpan(offset + 72, 520));
         }
 
@@ -300,10 +300,10 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
             0 => dlibMove,
             1 => _position + dlibMove,
             2 => size + dlibMove,
-            _ => throw new COMException("Origine non valida.", STG_E_INVALIDFUNCTION),
+            _ => throw new COMException(Loc.T("clipboard.invalidOrigin"), STG_E_INVALIDFUNCTION),
         };
         if (target < 0)
-            throw new COMException("Posizione non valida.", STG_E_INVALIDFUNCTION);
+            throw new COMException(Loc.T("clipboard.invalidPosition"), STG_E_INVALIDFUNCTION);
         _position = target;
         if (plibNewPosition != 0)
             Marshal.WriteInt64(plibNewPosition, _position);
@@ -319,9 +319,9 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
         };
     }
 
-    public void Write(byte[] pv, int cb, nint pcbWritten) => throw new COMException("Sola lettura.", STG_E_INVALIDFUNCTION);
+    public void Write(byte[] pv, int cb, nint pcbWritten) => throw new COMException(Loc.T("clipboard.readOnly"), STG_E_INVALIDFUNCTION);
 
-    public void SetSize(long libNewSize) => throw new COMException("Sola lettura.", STG_E_INVALIDFUNCTION);
+    public void SetSize(long libNewSize) => throw new COMException(Loc.T("clipboard.readOnly"), STG_E_INVALIDFUNCTION);
 
     /// <summary>Alcuni programmi in cui si incolla copiano lo stream con CopyTo invece di Read.</summary>
     public void CopyTo(IStream pstm, long cb, nint pcbRead, nint pcbWritten)
@@ -362,9 +362,9 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
     {
     }
 
-    public void LockRegion(long libOffset, long cb, int dwLockType) => throw new COMException("Non supportato.", STG_E_INVALIDFUNCTION);
+    public void LockRegion(long libOffset, long cb, int dwLockType) => throw new COMException(Loc.T("clipboard.notSupported"), STG_E_INVALIDFUNCTION);
 
-    public void UnlockRegion(long libOffset, long cb, int dwLockType) => throw new COMException("Non supportato.", STG_E_INVALIDFUNCTION);
+    public void UnlockRegion(long libOffset, long cb, int dwLockType) => throw new COMException(Loc.T("clipboard.notSupported"), STG_E_INVALIDFUNCTION);
 
     public void Clone(out IStream ppstm) => ppstm = new RemoteFileStream(source, fileIndex, size, name) { _position = _position };
 
@@ -377,7 +377,7 @@ internal sealed class RemoteFileStream(IRemoteFileSource source, int fileIndex, 
             // girano sul thread pool e non dipendono da questo thread.
             var data = Task.Run(() => source.ReadAsync(fileIndex, _position, count)).GetAwaiter().GetResult();
             if (data.Length == 0)
-                throw new RemoteFileUnavailableException("Il PC d'origine ha restituito un blocco vuoto.");
+                throw new RemoteFileUnavailableException(Loc.T("common.theSourcePcReturnedAnEmpty"));
             // Un blocco più lungo del richiesto si tronca: i byte in più non appartengono al file.
             _buffer = data.Length > count ? data[..count] : data;
             _bufferStart = _position;

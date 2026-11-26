@@ -29,7 +29,7 @@ public static class MessageDialog
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
         };
 
-        var close = Skin.Pill("CHIUDI");
+        var close = Skin.Pill(Loc.T("common.close"));
         close.IsDefault = true;
         close.IsCancel = true;
         close.Click += (_, _) => window.Close();
@@ -95,7 +95,8 @@ public static class MessageDialog
     /// Un clic sul testo, se è troncato (o se <paramref name="fullText"/> dice di più di quello che si vede),
     /// apre il messaggio completo. Il cursore a manina segnala quando c'è altro da leggere.
     /// </summary>
-    public static void ExpandOnClick(TextBlock block, string title, Func<string?>? fullText = null)
+    /// <param name="title">Letto al clic: segue la lingua corrente.</param>
+    public static void ExpandOnClick(TextBlock block, Func<string> title, Func<string?>? fullText = null)
     {
         string? Hidden()
         {
@@ -117,7 +118,7 @@ public static class MessageDialog
                 || TopLevel.GetTopLevel(block) is not Window owner)
                 return;
             e.Handled = true;
-            await ShowAsync(owner, title, full);
+            await ShowAsync(owner, title(), full);
         };
     }
 }

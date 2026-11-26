@@ -23,7 +23,7 @@ public static class PngCodec
     public static byte[] Encode(RgbaImage image)
     {
         if (image.Width <= 0 || image.Height <= 0 || image.Pixels.Length != image.Width * image.Height * 4)
-            throw new ArgumentException("Immagine RGBA non valida.", nameof(image));
+            throw new ArgumentException(Loc.T("image.invalidRgbaImage"), nameof(image));
 
         using var output = new MemoryStream();
         output.Write(Signature);
@@ -77,7 +77,7 @@ public static class PngCodec
     public static RgbaImage Decode(ReadOnlySpan<byte> png, long maxPixels = DefaultMaxPixels)
     {
         if (png.Length < 8 || !png[..8].SequenceEqual(Signature))
-            throw new InvalidDataException("Non è un PNG.");
+            throw new InvalidDataException(Loc.T("image.notAPng"));
 
         int width = 0, height = 0, bitDepth = 0, colorType = -1;
         byte[]? palette = null;
@@ -90,7 +90,7 @@ public static class PngCodec
             var length = BinaryPrimitives.ReadInt32BigEndian(png[offset..]);
             // Confronto senza somme: con length vicino a int.MaxValue la somma traboccherebbe.
             if (length < 0 || length > png.Length - offset - 12)
-                throw new InvalidDataException("Chunk PNG troncato.");
+                throw new InvalidDataException(Loc.T("image.truncatedPngChunk"));
             var type = Encoding.ASCII.GetString(png.Slice(offset + 4, 4));
             var data = png.Slice(offset + 8, length);
             offset += 12 + length;
@@ -99,13 +99,13 @@ public static class PngCodec
             {
                 case "IHDR":
                     if (length < 13)
-                        throw new InvalidDataException("Chunk IHDR troppo corto.");
+                        throw new InvalidDataException(Loc.T("image.ihdrChunkTooShort"));
                     width = BinaryPrimitives.ReadInt32BigEndian(data);
                     height = BinaryPrimitives.ReadInt32BigEndian(data[4..]);
                     bitDepth = data[8];
                     colorType = data[9];
                     if (data[12] != 0)
-                        throw new NotSupportedException("PNG interlacciato (Adam7) non supportato.");
+                        throw new NotSupportedException(Loc.T("image.interlacedPngAdam7NotSupported"));
                     break;
                 case "PLTE":
                     palette = data.ToArray();
@@ -123,7 +123,7 @@ public static class PngCodec
         }
 
         if (width <= 0 || height <= 0 || (long)width * height > Math.Min(maxPixels, DefaultMaxPixels))
-            throw new InvalidDataException("Dimensioni PNG non valide o troppo grandi.");
+            throw new InvalidDataException(Loc.T("image.invalidOrTooLargePngDimensions"));
 
         var channels = colorType switch
         {
@@ -132,25 +132,25 @@ public static class PngCodec
             3 => 1,
             4 => 2,
             6 => 4,
-            _ => throw new InvalidDataException($"Tipo colore PNG {colorType} non valido."),
+            _ => throw new InvalidDataException(Loc.T("image.invalidPngColorType", colorType)),
         };
         if (bitDepth is not (1 or 2 or 4 or 8 or 16) || (bitDepth == 16 && colorType == 3) || (bitDepth < 8 && colorType is 2 or 4 or 6))
-            throw new InvalidDataException($"Profondità PNG {bitDepth} non valida per il tipo colore {colorType}.");
+            throw new InvalidDataException(Loc.T("image.pngBitDepthNotValidFor", bitDepth, colorType));
         if (colorType == 3 && palette is null)
-            throw new InvalidDataException("PNG con palette senza chunk PLTE.");
+            throw new InvalidDataException(Loc.T("image.palettePngWithoutAPlteChunk"));
 
         var bitsPerPixel = channels * bitDepth;
         var bytesPerPixel = Math.Max(1, bitsPerPixel / 8);
         var longStride = ((long)width * bitsPerPixel + 7) / 8;
         var expected = (longStride + 1) * height;
         if (expected > Array.MaxLength)
-            throw new InvalidDataException("PNG troppo grande.");
+            throw new InvalidDataException(Loc.T("image.pngTooLarge"));
         var stride = (int)longStride;
 
         // Deflate comprime al massimo circa 1032:1: se i dati compressi non possono bastare, si
         // rifiuta prima di allocare il buffer (un PNG di pochi byte che dichiara 25 milioni di pixel).
         if (expected > idat.Length * MaxDeflateRatio + 1024)
-            throw new InvalidDataException("Dati PNG insufficienti.");
+            throw new InvalidDataException(Loc.T("image.notEnoughPngData"));
 
         // Si decomprime al massimo quanto serve: i dati in più (una "bomba" di compressione) non
         // vengono mai letti.
@@ -159,7 +159,7 @@ public static class PngCodec
         using (var zlib = new ZLibStream(idat, CompressionMode.Decompress))
         {
             if (zlib.ReadAtLeast(raw, raw.Length, throwOnEndOfStream: false) < raw.Length)
-                throw new InvalidDataException("Dati PNG insufficienti.");
+                throw new InvalidDataException(Loc.T("image.notEnoughPngData"));
         }
 
         var pixels = new byte[width * height * 4];
@@ -206,7 +206,7 @@ public static class PngCodec
 
                 break;
             default:
-                throw new InvalidDataException($"Filtro PNG {filter} non valido.");
+                throw new InvalidDataException(Loc.T("image.invalidPngFilter", filter));
         }
     }
 
@@ -241,7 +241,7 @@ public static class PngCodec
                     {
                         var index = Sample(row, x, 0, 1, bitDepth);
                         if (index * 3 + 2 >= palette!.Length)
-                            throw new InvalidDataException("Indice di palette fuori range.");
+                            throw new InvalidDataException(Loc.T("image.paletteIndexOutOfRange"));
                         r = palette[index * 3];
                         g = palette[index * 3 + 1];
                         b = palette[index * 3 + 2];

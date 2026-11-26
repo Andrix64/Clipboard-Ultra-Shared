@@ -18,7 +18,7 @@ public sealed class DeviceIdentity
     public DeviceIdentity(string displayName, string userName, byte[] signPublicKey, byte[] signSecretKey)
     {
         if (signPublicKey.Length != Sodium.SignPublicKeyBytes || signSecretKey.Length != Sodium.SignSecretKeyBytes)
-            throw new ArgumentException("Chiavi Ed25519 non valide.");
+            throw new ArgumentException(Loc.T("identity.invalidEd25519Keys"));
 
         DisplayName = displayName;
         UserName = userName;

@@ -18,8 +18,10 @@ public static class DisplayText
     /// </summary>
     private static readonly HashSet<char> BlankLooking = ['ᅟ', 'ᅠ', '⠀', 'ㅤ', 'ﾠ'];
 
-    public static string Sanitize(string? value, int maxLength, string fallback = "(senza nome)")
+    /// <param name="fallback">Testo se il valore è vuoto; null: "(senza nome)" nella lingua corrente.</param>
+    public static string Sanitize(string? value, int maxLength, string? fallback = null)
     {
+        fallback ??= Loc.T("content.unnamed");
         if (string.IsNullOrEmpty(value))
             return fallback;
 

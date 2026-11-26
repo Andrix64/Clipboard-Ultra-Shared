@@ -94,7 +94,7 @@ public sealed class CusDatabase : IDisposable
         {
             if (File.Exists(paths.DatabasePath))
                 throw new InvalidOperationException(
-                    $"Il DB '{paths.DatabasePath}' esiste ma la sua chiave non è nel secret store: impossibile aprirlo.");
+                    Loc.T("storage.theDbExistsButItsKey", paths.DatabasePath));
             key = RandomNumberGenerator.GetBytes(32);
             secrets.Save(DatabaseKeyName, key);
         }
@@ -394,7 +394,7 @@ public sealed class CusDatabase : IDisposable
             var version = Convert.ToInt32(Scalar("PRAGMA user_version;"), CultureInfo.InvariantCulture);
             if (version > Migrations.Length)
                 throw new InvalidOperationException(
-                    $"Il DB ha schema {version}, più recente di quello supportato ({Migrations.Length}). Aggiorna CUS.");
+                    Loc.T("storage.theDbHasSchemaNewerThan", version, Migrations.Length));
 
             for (var next = version + 1; next <= Migrations.Length; next++)
             {

@@ -40,6 +40,9 @@ public partial class MainWindow : Window
     /// <summary>Uscita chiesta dall'area di notifica (o dal sistema): niente riduzione in background.</summary>
     private bool _exitRequested;
 
+    /// <summary>La lingua è cambiata: i testi scritti dal codice si riscrivono (quelli dello XAML li aggiorna <see cref="Tr"/>).</summary>
+    private event Action? LanguageChanged;
+
     /// <summary>Usato solo dal designer di Avalonia.</summary>
     public MainWindow()
         : this(MainWindowModel.Empty)
@@ -53,16 +56,23 @@ public partial class MainWindow : Window
         Title = model.Title;
         Skin.SetContent(MinimizeButton, Icons.Minus);
         Skin.SetContent(CloseButton, Icons.Xmark);
-        Skin.SetContent(OfferButton, $"{Icons.Eye} OFFRITI COME HOST");
-        Skin.SetRich(FriendsHint, $"{Icons.SignIn} entra senza conferma · {Icons.Infinity} si collega quando vuole (patti reciproci: se uno li scioglie cadono per entrambi). {Icons.Key} vede le tue password (solo da questo lato).");
-        InfoText.Text = string.Join(Environment.NewLine, model.InfoLines);
+        void StaticTexts()
+        {
+            Skin.SetContent(OfferButton, Loc.T("mainWindow.offerAsHost", Icons.Eye));
+            Skin.SetRich(FriendsHint, Loc.T("mainWindow.joinsWithoutConfirmationConnectsWheneverThey", Icons.SignIn, Icons.Infinity, Icons.Key));
+            InfoText.Text = string.Join(Environment.NewLine, model.InfoLines());
+        }
+
+        StaticTexts();
+        LanguageChanged += StaticTexts;
+        Loc.Changed += () => Post(() => LanguageChanged?.Invoke());
         WireChrome();
         WireExpandableTexts();
 
         if (model.StartupError is { } error)
         {
-            LcdState.Text = "ERRORE";
-            LcdParticipants.Text = "Avvio non riuscito";
+            LcdState.Text = Loc.T("mainWindow.error");
+            LcdParticipants.Text = Loc.T("mainWindow.startupFailed");
             StartupErrorPanel.IsVisible = true;
             StartupErrorText.Text = error;
             LeftSide.IsEnabled = false;
@@ -95,13 +105,14 @@ public partial class MainWindow : Window
         void ShowIdentity()
         {
             Skin.SetRich(LcdDevice, $"{Icons.Desktop} {node.Identity.DisplayName}");
-            IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\nIMPRONTA {node.Identity.Info.Fingerprint}";
+            IdentityText.Text = $"{node.Identity.DisplayName} ({node.Identity.UserName})\n{Loc.T("mainWindow.fingerprint")} {node.Identity.Info.Fingerprint}";
+            LcdPort.Text = Loc.T("mainWindow.port", node.Port);
         }
 
         ShowIdentity();
         NameInput.Text = node.Identity.DisplayName;
         node.IdentityChanged += (_, _) => Post(ShowIdentity);
-        LcdPort.Text = $"PORTA {node.Port}";
+        LanguageChanged += ShowIdentity;
 
         WireNetworkPage(node);
         WireSessionPage(node);
@@ -121,6 +132,16 @@ public partial class MainWindow : Window
         RefreshPeers();
         RefreshFriends();
         RefreshCurrent();
+        LanguageChanged += () =>
+        {
+            _peersSignature = "";
+            RefreshSession();
+            RefreshPeers();
+            RefreshFriends();
+            RefreshCurrent();
+            if (HistoryPage.IsVisible)
+                _ = RefreshHistoryAsync();
+        };
     }
 
     /// <summary>Riapre la finestra dall'area di notifica.</summary>
@@ -176,7 +197,7 @@ public partial class MainWindow : Window
         if (_shutdownStarted)
             return;
         _shutdownStarted = true;
-        LcdState.Text = "CHIUSURA...";
+        LcdState.Text = Loc.T("CHIUSURA...", "CLOSING...");
         try
         {
             await shutdown();
@@ -278,7 +299,7 @@ public partial class MainWindow : Window
     {
         var result = await node.JoinAsync(host, port, expectedDeviceId);
         if (result.Outcome == JoinOutcome.Rejected)
-            _model.Notifier?.Info($"{result.PeerName} non ti ha fatto entrare" + (result.Reason is null ? "." : $": {result.Reason}."));
+            _model.Notifier?.Info(Loc.T("mainWindow.didNotLetYouIn", result.PeerName) + (result.Reason is null ? "." : $": {result.Reason}."));
     }
 
     private string _radarSignature = "";
@@ -330,7 +351,7 @@ public partial class MainWindow : Window
         PeersPanel.Children.Clear();
         if (peers.Count == 0)
         {
-            PeersPanel.Children.Add(Hint("Nessun host in rete. Chi vuole condividere deve premere OFFRITI COME HOST; oppure inserisci un indirizzo qui sotto."));
+            PeersPanel.Children.Add(Hint(Loc.T("mainWindow.noHostsOnTheNetworkWhoever")));
             return;
         }
 
@@ -338,8 +359,10 @@ public partial class MainWindow : Window
         {
             var who = peer.IsManual ? peer.Address : $"{peer.DisplayName}{(peer.UserName.Length > 0 ? $" ({peer.UserName})" : "")}";
             var detail = peer.IsAnnounced
-                ? (peer.Participants <= 1 ? "libero, si offre come host" : $"{peer.Participants} persone in sessione")
-                : peer.IsManual ? "indirizzo salvato" : "amico, non visibile ora";
+                ? (peer.Participants <= 1
+                    ? Loc.T("mainWindow.freeOfferingAsHost")
+                    : Loc.T("mainWindow.peopleInSession", peer.Participants))
+                : peer.IsManual ? Loc.T("mainWindow.savedAddress") : Loc.T("mainWindow.friendNotVisibleNow");
             var badges = (peer.LooksLikeFriend is not null ? $"{Icons.Warning} " : "")
                 + (peer.Agreement switch { AgreementLevel.Anytime => $"{Icons.Infinity} ", AgreementLevel.AutoJoin => $"{Icons.SignIn} ", _ => "" })
                 + (peer.DeviceId is { } id && node.Friends.TrustsWithSensitive(id) ? $"{Icons.Key} " : "");
@@ -347,20 +370,21 @@ public partial class MainWindow : Window
             // Gli annunci non sono autenticati: per chi non è un amico conta l'impronta (verificata alla
             // connessione), non il nome, e un nome uguale a quello di un amico si segnala.
             if (peer.LooksLikeFriend is { } imitated)
-                detail = $"NON è il tuo amico {imitated}: stesso nome, altro PC";
+                detail = Loc.T("mainWindow.notYourFriendSameNameDifferent", imitated);
             if (peer.Agreement == AgreementLevel.None && peer.Fingerprint is { } fingerprint)
-                detail += $" · impronta {fingerprint}";
+                detail += Loc.T("mainWindow.fingerprint2", fingerprint);
 
             var buttons = new List<Control>();
             if (peer.CanJoin)
             {
-                var join = RowButton("ENTRA", peer.Agreement == AgreementLevel.None ? "Chiedi di entrare: l'host decide" : "Entra senza conferma (patto)");
+                var join = RowButton(Loc.T("common.join"), peer.Agreement == AgreementLevel.None
+                    ? Loc.T("mainWindow.askToJoinTheHostDecides")
+                    : Loc.T("mainWindow.joinWithoutConfirmationPact"));
                 join.Click += async (_, _) => await RunFrom(join, async () =>
                 {
-                    if (peer.LooksLikeFriend is { } friendName && !await ConfirmDialog.ShowAsync(this, "Non è il tuo amico",
-                            $"\"{peer.DisplayName}\" si chiama come il tuo amico {friendName}, ma è un altro PC (impronta {peer.Fingerprint}). "
-                            + "Chiunque in rete può scegliersi un nome: entra solo se sai di chi è.",
-                            "ENTRA COMUNQUE"))
+                    if (peer.LooksLikeFriend is { } friendName && !await ConfirmDialog.ShowAsync(this, Loc.T("mainWindow.notYourFriend"),
+                            Loc.T("mainWindow.hasTheSameNameAsYour", peer.DisplayName, friendName, peer.Fingerprint),
+                            Loc.T("mainWindow.joinAnyway")))
                         return;
                     await Join(node, peer.Host, peer.Port, peer.DeviceId);
                 });
@@ -369,7 +393,7 @@ public partial class MainWindow : Window
 
             if (peer.IsManual)
             {
-                var remove = RowButton(Icons.Xmark, "Togli dall'elenco");
+                var remove = RowButton(Icons.Xmark, Loc.T("mainWindow.removeFromTheList"));
                 remove.Click += (_, _) => node.RemoveManualPeer(peer.Address);
                 buttons.Add(remove);
             }
@@ -397,28 +421,32 @@ public partial class MainWindow : Window
         var session = node.Session;
         if (session is null)
         {
-            LcdState.Text = "IN ATTESA";
-            LcdParticipants.Text = "Offriti come host o entra (pannello RETE)";
+            LcdState.Text = Loc.T("common.waiting");
+            LcdParticipants.Text = Loc.T("mainWindow.offerAsHostOrJoinNetwork");
         }
         else
         {
             LcdState.Text = session.Role == SessionRole.Host
-                ? (session.IsSharing ? "CONDIVISA · HOST" : "VISIBILE")
-                : session.MyDirection == ShareDirection.ReadOnly ? "SOLA LETTURA" : "CONDIVISA";
+                ? (session.IsSharing ? Loc.T("mainWindow.sharedHost") : Loc.T("mainWindow.visible"))
+                : session.MyDirection == ShareDirection.ReadOnly ? Loc.T("mainWindow.readOnly") : Loc.T("mainWindow.shared");
             Skin.SetRich(LcdParticipants, session.IsSharing
                 ? string.Join("  ", session.Participants.Select(p => $"{AvaloniaOverlayIndicator.Glyph(p).Glyph} {p.DisplayName}{(p.IsSelf ? Icons.CaretLeft : "")}"))
-                : session.IsVisible ? "In attesa che qualcuno chieda di entrare..." : "Nessun altro nella sessione");
+                : session.IsVisible
+                    ? Loc.T("mainWindow.waitingForSomeoneToAskTo")
+                    : Loc.T("mainWindow.nobodyElseInTheSession"));
         }
 
         RefreshRadar(node, node.Peers);
         var host = session?.Role == SessionRole.Host;
-        PageNetworkButton.Content = session is null ? "RETE" : "SESSIONE";
+        PageNetworkButton.Content = session is null ? Loc.T("common.network") : Loc.T("mainWindow.session");
         VisibleToggle.IsVisible = host;
         VisibleToggle.Classes.Set("active", session?.IsVisible == true);
-        Skin.SetContent(VisibleToggle, session?.IsVisible == true ? $"{Icons.Eye} VISIBILE: SÌ" : $"{Icons.EyeSlash} VISIBILE: NO");
+        Skin.SetContent(VisibleToggle, session?.IsVisible == true
+            ? Loc.T("mainWindow.visibleYes", Icons.Eye)
+            : Loc.T("mainWindow.visibleNo", Icons.EyeSlash));
         SensitiveToggle.IsVisible = host && session!.IsSharing;
         SensitiveToggle.Classes.Set("active", session?.SensitiveForAll == true);
-        Skin.SetContent(LeaveButton, host ? $"{Icons.Stop} CHIUDI SESSIONE" : $"{Icons.Stop} ESCI");
+        Skin.SetContent(LeaveButton, host ? Loc.T("mainWindow.endSession", Icons.Stop) : Loc.T("mainWindow.leave", Icons.Stop));
         RequestsTitle.IsVisible = host;
 
         if (!FriendsPageShown)
@@ -439,23 +467,25 @@ public partial class MainWindow : Window
         var requests = node.JoinRequests;
         if (requests.Count == 0)
         {
-            RequestsPanel.Children.Add(Hint(node.IsVisible ? "Nessuna richiesta in attesa." : "Sei nascosto: nessuno può chiedere di entrare."));
+            RequestsPanel.Children.Add(Hint(node.IsVisible
+                ? Loc.T("mainWindow.noPendingRequests")
+                : Loc.T("mainWindow.youAreHiddenNobodyCanAsk")));
             return;
         }
 
         foreach (var request in requests)
         {
-            var bidirectional = RowButton(Icons.Bidirectional, "Fai entrare con accesso bidirezionale");
-            var readOnly = RowButton(Icons.ArrowDown, "Fai entrare in sola lettura");
-            var reject = RowButton(Icons.Xmark, "Rifiuta");
+            var bidirectional = RowButton(Icons.Bidirectional, Loc.T("mainWindow.letInWithTwoWayAccess"));
+            var readOnly = RowButton(Icons.ArrowDown, Loc.T("mainWindow.letInReadOnly"));
+            var reject = RowButton(Icons.Xmark, Loc.T("mainWindow.reject"));
             bidirectional.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Accept);
             readOnly.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.AcceptReadOnly);
             reject.Click += (_, _) => node.AnswerJoinRequest(request.RequestId, ConsentDecision.Reject);
             RequestsPanel.Children.Add(Row(
                 $"{(request.LooksLikeFriend is null ? "?" : Icons.Warning)} {request.DisplayName}{(request.UserName.Length > 0 ? $" ({request.UserName})" : "")}",
                 request.LooksLikeFriend is { } imitated
-                    ? $"NON è il tuo amico {imitated}: stesso nome, altro PC · impronta {request.Fingerprint}"
-                    : $"impronta {request.Fingerprint}",
+                    ? Loc.T("mainWindow.notYourFriendSameNameDifferent2", imitated, request.Fingerprint)
+                    : Loc.T("mainWindow.fingerprint3", request.Fingerprint),
                 highlight: false,
                 [bidirectional, readOnly, reject]));
         }
@@ -480,7 +510,9 @@ public partial class MainWindow : Window
             {
                 // Il membro con accesso bidirezionale passa a sola lettura (e torna) con un tasto.
                 var readOnly = session.MyDirection == ShareDirection.ReadOnly;
-                var toggle = RowButton(readOnly ? Icons.ArrowDown : Icons.Bidirectional, readOnly ? "Sei in sola lettura: torna bidirezionale" : "Passa in sola lettura: le tue copie restano qui");
+                var toggle = RowButton(readOnly ? Icons.ArrowDown : Icons.Bidirectional, readOnly
+                    ? Loc.T("mainWindow.youAreReadOnlyGoBack")
+                    : Loc.T("mainWindow.switchToReadOnlyYourCopies"));
                 toggle.Click += async (_, _) => await RunFrom(toggle, () => node.SetMyDirectionAsync(readOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
                 buttons.Add(toggle);
             }
@@ -492,14 +524,18 @@ public partial class MainWindow : Window
                     // Un pulsante per membro che alterna bidirezionale e sola lettura.
                     var granted = participant.Granted;
                     var grant = RowButton(granted == ShareDirection.ReadOnly ? Icons.ArrowDown : Icons.Bidirectional,
-                        granted == ShareDirection.ReadOnly ? "In sola lettura: clic per dargli accesso bidirezionale" : "Bidirezionale: clic per metterlo in sola lettura");
+                        granted == ShareDirection.ReadOnly
+                            ? Loc.T("mainWindow.readOnlyClickToGiveTwo")
+                            : Loc.T("mainWindow.twoWayClickToMakeRead"));
                     grant.Click += async (_, _) => await RunFrom(grant, () => node.SetMemberGrantAsync(participant.DeviceId,
                         granted == ShareDirection.ReadOnly ? ShareDirection.Bidirectional : ShareDirection.ReadOnly));
                     buttons.Add(grant);
                 }
 
                 var trusted = friend?.TrustedWithSensitive == true;
-                var trust = RowButton(Icons.Key, trusted ? "Affidabile: vede le password che copi. Clic per togliere" : "Clic per mostrargli anche le password che copi (affidabile)");
+                var trust = RowButton(Icons.Key, trusted
+                    ? Loc.T("mainWindow.trustedSeesThePasswordsYouCopy")
+                    : Loc.T("mainWindow.clickToAlsoShowThemThe"));
                 trust.Classes.Add("toggle");
                 trust.Classes.Set("lit", trusted);
                 trust.Click += (_, _) => node.SetSensitiveTrust(participant.DeviceId, participant.DisplayName, !trusted);
@@ -508,8 +544,8 @@ public partial class MainWindow : Window
                 if (host)
                 {
                     var agreement = friend?.Agreement ?? AgreementLevel.None;
-                    var pact = RowButton(agreement switch { AgreementLevel.Anytime => Icons.Infinity, AgreementLevel.AutoJoin => Icons.SignIn, _ => "PATTO" },
-                        "Proponi un patto reciproco (deve accettarlo)");
+                    var pact = RowButton(agreement switch { AgreementLevel.Anytime => Icons.Infinity, AgreementLevel.AutoJoin => Icons.SignIn, _ => Loc.T("mainWindow.pact") },
+                        Loc.T("mainWindow.proposeAMutualPactTheyMust"));
                     pact.Classes.Add("toggle");
                     pact.Classes.Set("lit", agreement != AgreementLevel.None);
                     pact.Flyout = PactMenu(node, participant.DeviceId, agreement);
@@ -517,9 +553,9 @@ public partial class MainWindow : Window
                 }
             }
 
-            var detail = participant.IsSelf ? $"{role} · sei tu" : role;
+            var detail = participant.IsSelf ? Loc.T("common.you", role) : role;
             if (participant.IsHost && !participant.IsSelf && friend?.TrustedWithSensitive != true)
-                detail += " · le tue password non gli arrivano";
+                detail += Loc.T("mainWindow.yourPasswordsDonTReachThem");
             ParticipantsPanel.Children.Add(Row($"{glyph} {participant.DisplayName}", detail, participant.IsSelf, buttons));
         }
     }
@@ -534,17 +570,17 @@ public partial class MainWindow : Window
             item.Click += async (_, _) => await Run(async () =>
             {
                 if (!await node.ProposeAgreementAsync(deviceId, level))
-                    _model.Notifier?.Info("Patto rifiutato.");
+                    _model.Notifier?.Info(Loc.T("mainWindow.pactRejected"));
             });
             flyout.Items.Add(item);
         }
 
-        Add($"{Icons.SignIn} Entra senza conferma quando ti offri", AgreementLevel.AutoJoin);
-        Add($"{Icons.Infinity} Collegamento in qualsiasi momento", AgreementLevel.Anytime);
+        Add(Loc.T("mainWindow.joinsWithoutConfirmationWhenYouOffer", Icons.SignIn), AgreementLevel.AutoJoin);
+        Add(Loc.T("mainWindow.connectionAtAnyTime", Icons.Infinity), AgreementLevel.Anytime);
         if (current != AgreementLevel.None)
         {
             var revoke = new MenuItem();
-            Skin.SetHeader(revoke, $"{Icons.Xmark} Sciogli il patto");
+            Skin.SetHeader(revoke, Loc.T("mainWindow.dissolveThePact", Icons.Xmark));
             revoke.Click += async (_, _) => await Run(() => node.RevokeAgreementAsync(deviceId));
             flyout.Items.Add(revoke);
         }
@@ -559,7 +595,9 @@ public partial class MainWindow : Window
         var transfers = node.Transfers;
         var active = transfers.Count(t => t.State == TransferState.Active);
         TransfersButton.IsVisible = transfers.Count > 0;
-        Skin.SetContent(TransfersButton, active > 0 ? $"{Icons.Transfers} TRASFERIMENTI ({active})" : $"{Icons.Transfers} TRASFERIMENTI");
+        Skin.SetContent(TransfersButton, active > 0
+            ? Loc.T("mainWindow.transfers", Icons.Transfers, active)
+            : Loc.T("mainWindow.transfers2", Icons.Transfers));
     }
 
     private void RefreshCurrent()
@@ -578,7 +616,7 @@ public partial class MainWindow : Window
             ? DisplayText.MiddleEllipsis(DisplayText.Sanitize(current.Title, 260, ""), 26)
             : current.Title;
         string Line(string shownTitle) =>
-            $"{(self ? "tu" : DisplayText.Sanitize(current.OriginName, 32))}: {(current.IsSensitive ? "••• " : "")}{shownTitle}{(current.IsShared ? "" : " · solo qui")}";
+            $"{(self ? Loc.T("mainWindow.you") : DisplayText.Sanitize(current.OriginName, 32))}: {(current.IsSensitive ? "••• " : "")}{shownTitle}{(current.IsShared ? "" : Loc.T("mainWindow.hereOnly"))}";
         LcdCurrent.Text = Line(title);
         _currentFull = current.IsSensitive ? LcdCurrent.Text : Line(DisplayText.Sanitize(current.Title, 4000, ""));
         LcdCurrentSize.Text = current.SizeBytes is { } size ? DisplayText.FormatSize(size) : "";
@@ -594,14 +632,16 @@ public partial class MainWindow : Window
         var friends = node.Friends.All;
         if (friends.Count == 0)
         {
-            FriendsPanel.Children.Add(Hint($"Nessun amico. In una sessione l'host può proporre un patto ai connessi; chiunque può marcare un partecipante come affidabile ({Icons.Key})."));
+            FriendsPanel.Children.Add(Hint(Loc.T("mainWindow.noFriendsInASessionThe", Icons.Key)));
             return;
         }
 
         foreach (var friend in friends)
         {
             var buttons = new List<Control>();
-            var trust = RowButton(Icons.Key, friend.TrustedWithSensitive ? "Vede le tue password: clic per togliere" : "Clic per mostrargli le tue password");
+            var trust = RowButton(Icons.Key, friend.TrustedWithSensitive
+                ? Loc.T("mainWindow.seesYourPasswordsClickToRemove")
+                : Loc.T("mainWindow.clickToShowThemYourPasswords"));
             trust.Classes.Add("toggle");
                 trust.Classes.Set("lit", friend.TrustedWithSensitive);
             trust.Click += (_, _) => node.SetSensitiveTrust(friend.DeviceId, friend.DisplayName, !friend.TrustedWithSensitive);
@@ -609,30 +649,30 @@ public partial class MainWindow : Window
 
             if (friend.Agreement != AgreementLevel.None)
             {
-                var revoke = RowButton("SCIOGLI", "Scioglie il patto per entrambi");
+                var revoke = RowButton(Loc.T("mainWindow.dissolve"), Loc.T("mainWindow.dissolvesThePactForBoth"));
                 revoke.Click += async (_, _) => await RunFrom(revoke, async () =>
                 {
-                    if (await ConfirmDialog.ShowAsync(this, "Sciogli il patto",
-                            $"Sciogliere il patto con {friend.DisplayName}? Cade anche dal suo lato: per rifarlo servirà una nuova proposta in sessione.",
-                            "SCIOGLI"))
+                    if (await ConfirmDialog.ShowAsync(this, Loc.T("mainWindow.dissolveThePact2"),
+                            Loc.T("mainWindow.dissolveThePactWithItEnds", friend.DisplayName),
+                            Loc.T("mainWindow.dissolve")))
                         await node.RevokeAgreementAsync(friend.DeviceId);
                 });
                 buttons.Add(revoke);
             }
 
-            var remove = RowButton(Icons.Xmark, "Togli dagli amici (patto e fiducia)");
+            var remove = RowButton(Icons.Xmark, Loc.T("mainWindow.removeFromFriendsPactAndTrust"));
             remove.Click += async (_, _) => await RunFrom(remove, () => node.RemoveFriendAsync(friend.DeviceId));
             buttons.Add(remove);
 
             var agreement = friend.Agreement switch
             {
-                AgreementLevel.Anytime => $"{Icons.Infinity} si collega quando vuole",
-                AgreementLevel.AutoJoin => $"{Icons.SignIn} entra senza conferma",
-                _ => "nessun patto",
+                AgreementLevel.Anytime => Loc.T("mainWindow.connectsWheneverTheyWant", Icons.Infinity),
+                AgreementLevel.AutoJoin => Loc.T("mainWindow.joinsWithoutConfirmation", Icons.SignIn),
+                _ => Loc.T("mainWindow.noPact"),
             };
             var where = friend.LastEndpoint is { } endpoint ? $" · {endpoint}" : "";
-            FriendsPanel.Children.Add(Row(friend.DisplayName, $"{agreement}{(friend.TrustedWithSensitive ? $" · {Icons.Key} vede le password" : "")}{where}", false, buttons,
-                tip: $"Impronta {friend.Fingerprint}"));
+            FriendsPanel.Children.Add(Row(friend.DisplayName, $"{agreement}{(friend.TrustedWithSensitive ? Loc.T("mainWindow.seesPasswords", Icons.Key) : "")}{where}", false, buttons,
+                tip: Loc.T("mainWindow.fingerprint4", friend.Fingerprint)));
         }
     }
 
@@ -645,7 +685,7 @@ public partial class MainWindow : Window
         {
             if (HistoryList.SelectedIndex is not (var i and >= 0) || i >= _history.Count)
             {
-                _model.Notifier?.Info("Scegli una voce della cronologia, poi premi COPIA.");
+                _model.Notifier?.Info(Loc.T("mainWindow.pickAHistoryEntryThenPress"));
                 return;
             }
 
@@ -654,7 +694,7 @@ public partial class MainWindow : Window
             await RunFrom(UseHistoryButton, async () =>
             {
                 await node.UseHistoryEntryAsync(entry);
-                AddActivity($"Copiato dalla cronologia: {Describe(entry)}");
+                AddActivity(Loc.T("mainWindow.copiedFromHistory", Describe(entry)));
             });
         };
         node.CurrentClipboardChanged += (_, _) => Post(() =>
@@ -668,7 +708,9 @@ public partial class MainWindow : Window
     {
         if (_model.Node is not { } node)
             return;
-        HistoryTitle.Text = node.Session?.Role == SessionRole.Member ? "COPIE DI QUESTA SESSIONE (DALL'HOST)" : "ULTIME 20 COPIE OSPITATE QUI";
+        HistoryTitle.Text = node.Session?.Role == SessionRole.Member
+            ? Loc.T("mainWindow.copiesInThisSessionFromThe")
+            : Loc.T("mainWindow.lastCopiesHostedHere");
         await Run(async () =>
         {
             var entries = await node.GetHistoryAsync();
@@ -687,9 +729,22 @@ public partial class MainWindow : Window
         void Update()
         {
             var on = node.KeepRunningInBackground;
-            BackgroundToggle.Content = on ? "SÌ" : "NO";
+            BackgroundToggle.Content = on ? Loc.T("mainWindow.yes") : "NO";
             BackgroundToggle.Classes.Set("active", on);
+            LanguageItalianButton.Classes.Set("active", Loc.Current == AppLanguage.Italian);
+            LanguageEnglishButton.Classes.Set("active", Loc.Current == AppLanguage.English);
         }
+
+        void SetLanguage(AppLanguage language)
+        {
+            // Salvata nel profilo: da qui in poi vale questa, non più quella dell'installer.
+            node.SavedLanguage = language;
+            Loc.Current = language;
+        }
+
+        LanguageItalianButton.Click += (_, _) => SetLanguage(AppLanguage.Italian);
+        LanguageEnglishButton.Click += (_, _) => SetLanguage(AppLanguage.English);
+        LanguageChanged += Update;
 
         BackgroundToggle.Click += (_, _) =>
         {
@@ -736,21 +791,21 @@ public partial class MainWindow : Window
         };
         SimCopyFilesButton.Click += async (_, _) =>
         {
-            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { AllowMultiple = true, Title = "File da copiare" });
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { AllowMultiple = true, Title = Loc.T("mainWindow.filesToCopy") });
             var paths = files.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
             if (paths.Count > 0)
                 simulation.CopyPaths(paths);
         };
         SimCopyFolderButton.Click += async (_, _) =>
         {
-            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Cartella da copiare" });
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = Loc.T("mainWindow.folderToCopy") });
             var paths = folders.Select(f => f.TryGetLocalPath()).OfType<string>().ToList();
             if (paths.Count > 0)
                 simulation.CopyPaths(paths);
         };
         SimPasteFilesButton.Click += async (_, _) =>
         {
-            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Dove incollare i file" });
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = Loc.T("mainWindow.whereToPasteTheFiles") });
             if (folders.FirstOrDefault()?.TryGetLocalPath() is not { } folder)
                 return;
             await Run(async () =>
@@ -758,11 +813,11 @@ public partial class MainWindow : Window
                 try
                 {
                     var written = await simulation.PasteFilesAsync(folder);
-                    AddActivity($"Incollati {written.Count} file in {folder}.");
+                    AddActivity(Loc.T("mainWindow.pastedFilesInto", written.Count, folder));
                 }
                 catch (RemoteFileUnavailableException ex)
                 {
-                    AddActivity($"! Impossibile incollare: {ex.Message}");
+                    AddActivity(Loc.T("mainWindow.cannotPaste", ex.Message));
                 }
             });
         };
@@ -776,15 +831,15 @@ public partial class MainWindow : Window
     /// </summary>
     private void WireExpandableTexts()
     {
-        MessageDialog.ExpandOnClick(LcdDevice, "Questo PC");
-        MessageDialog.ExpandOnClick(LcdParticipants, "Sessione");
-        MessageDialog.ExpandOnClick(LcdCurrent, "Clipboard attuale", () => _currentFull);
-        MessageDialog.ExpandOnClick(LcdLast, "Ultima attività", () => _lastActivityFull);
+        MessageDialog.ExpandOnClick(LcdDevice, () => Loc.T("mainWindow.thisPc"));
+        MessageDialog.ExpandOnClick(LcdParticipants, () => Loc.T("mainWindow.session2"));
+        MessageDialog.ExpandOnClick(LcdCurrent, () => Loc.T("mainWindow.currentClipboard"), () => _currentFull);
+        MessageDialog.ExpandOnClick(LcdLast, () => Loc.T("mainWindow.lastActivity"), () => _lastActivityFull);
 
         ActivityList.Tapped += async (_, e) =>
         {
             if (ItemText(e.Source) is { } line)
-                await MessageDialog.ShowAsync(this, "Attività", line);
+                await MessageDialog.ShowAsync(this, Loc.T("mainWindow.activity"), line);
         };
         HistoryList.DoubleTapped += async (_, e) =>
         {
@@ -792,8 +847,8 @@ public partial class MainWindow : Window
                 return;
             var entry = _history[i];
             var text = $"{entry.CreatedUtc.ToLocalTime():dd/MM HH:mm} · {DisplayText.Sanitize(entry.OriginName, 64)}\n\n"
-                + DisplayText.Sanitize(entry.Describe(), 4000, "(vuota)");
-            await MessageDialog.ShowAsync(this, "Cronologia", text);
+                + DisplayText.Sanitize(entry.Describe(), 4000, Loc.T("common.empty"));
+            await MessageDialog.ShowAsync(this, Loc.T("mainWindow.history"), text);
         };
     }
 
@@ -815,7 +870,7 @@ public partial class MainWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         Skin.SetRich(titleText, title);
-        MessageDialog.ExpandOnClick(titleText, "Dettaglio");
+        MessageDialog.ExpandOnClick(titleText, () => Loc.T("mainWindow.detail"));
         var detailText = new TextBlock
         {
             FontFamily = Skin.LcdFont,
@@ -825,7 +880,7 @@ public partial class MainWindow : Window
         };
 
         Skin.SetRich(detailText, detail);
-        MessageDialog.ExpandOnClick(detailText, "Dettaglio");
+        MessageDialog.ExpandOnClick(detailText, () => Loc.T("mainWindow.detail"));
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
         foreach (var button in buttons)
@@ -918,7 +973,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _model.Notifier?.Error($"Errore inatteso: {ex.Message}");
+            _model.Notifier?.Error(Loc.T("mainWindow.unexpectedError", ex.Message));
         }
     }
 
@@ -934,7 +989,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Descrizione di una voce per le liste: testo ripulito (può arrivare da un altro PC) e accorciato.</summary>
-    private static string Describe(HistoryEntry entry) => Shorten(DisplayText.Sanitize(entry.Describe(), 200, "(vuota)"));
+    private static string Describe(HistoryEntry entry) => Shorten(DisplayText.Sanitize(entry.Describe(), 200, Loc.T("common.empty")));
 
     private static string Shorten(string text)
     {

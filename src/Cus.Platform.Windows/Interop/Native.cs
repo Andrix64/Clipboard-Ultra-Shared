@@ -169,12 +169,12 @@ internal static unsafe partial class Native
     {
         var handle = GlobalAlloc(GMEM_MOVEABLE, (nuint)Math.Max(1, data.Length));
         if (handle == 0)
-            throw new OutOfMemoryException("GlobalAlloc fallita.");
+            throw new OutOfMemoryException(Loc.T("clipboard.globalallocFailed"));
         var pointer = GlobalLock(handle);
         if (pointer == 0)
         {
             GlobalFree(handle);
-            throw new OutOfMemoryException("GlobalLock fallita.");
+            throw new OutOfMemoryException(Loc.T("clipboard.globallockFailed"));
         }
 
         data.CopyTo(new Span<byte>((void*)pointer, data.Length));

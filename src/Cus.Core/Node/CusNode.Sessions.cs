@@ -59,12 +59,12 @@ public sealed partial class CusNode
             if (visible == _visible)
                 return;
             if (visible && _memberSession is not null)
-                throw new CusOperationException("Sei in una condivisione come membro: esci prima di offrirti come host.");
+                throw new CusOperationException(Loc.T("session.youAreInASessionAs"));
 
             // Una richiesta di ingresso in corso, se accettata, renderebbe questo PC membro: la
             // visibilità tornerebbe falsa senza che l'utente lo sappia.
             if (visible && !fromJoin && Volatile.Read(ref _joining) != 0)
-                throw new CusOperationException("C'è una richiesta di ingresso in corso: attendi la risposta prima di offrirti come host.");
+                throw new CusOperationException(Loc.T("session.aJoinRequestIsInProgress"));
 
             _visible = visible;
             if (visible)
@@ -92,17 +92,17 @@ public sealed partial class CusNode
         }
 
         foreach (var pending in rejected)
-            pending.Decide(ConsentDecision.Reject, "l'host ha smesso di offrirsi");
+            pending.Decide(ConsentDecision.Reject, WireTexts.HostStoppedOffering.Text);
 
         if (visible)
         {
-            Log("Visibile in rete: gli altri possono chiederti di entrare.");
+            Log(Loc.T("session.visibleOnTheNetworkOthersCan"));
             if (_discovery is { } discovery)
                 await TryAnnounceAsync(discovery.AnnounceNowAsync);
         }
         else
         {
-            Log("Non più visibile in rete.");
+            Log(Loc.T("session.noLongerVisibleOnTheNetwork"));
             if (_discovery is { } discovery)
                 await TryAnnounceAsync(() => discovery.AnnounceHiddenAsync(
                     new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port)));
@@ -141,11 +141,11 @@ public sealed partial class CusNode
         {
             if (_memberSession is not null)
             {
-                reason = $"{Identity.DisplayName} è già in una condivisione";
+                reason = WireTexts.AlreadyInSession.Format(Identity.DisplayName);
             }
             else if (_hostSession?.Members.ContainsKey(remote.DeviceId) == true)
             {
-                reason = "sei già nella sessione";
+                reason = WireTexts.YouAreAlreadyIn.Text;
             }
             else if (level == AgreementLevel.Anytime || (_visible && level == AgreementLevel.AutoJoin))
             {
@@ -168,11 +168,11 @@ public sealed partial class CusNode
             }
             else if (_hostSession is not { Offered: true })
             {
-                reason = $"{Identity.DisplayName} non si sta offrendo come host";
+                reason = WireTexts.NotOfferingHost.Format(Identity.DisplayName);
             }
             else if (IsInJoinCooldown(connection))
             {
-                reason = "hai chiesto da poco: riprova tra qualche secondo";
+                reason = WireTexts.AskedTooRecently.Text;
             }
             else
             {
@@ -187,7 +187,7 @@ public sealed partial class CusNode
         if (viaAgreement)
         {
             await AfterAdmittedAsync(remote.DisplayName, ShareDirection.Bidirectional);
-            _notifier.Info($"{remote.DisplayName} è entrato nella tua condivisione (patto {DescribeAgreement(level)}).");
+            _notifier.Info(Loc.T("session.joinedYourSessionPact", remote.DisplayName, DescribeAgreement(level)));
             return;
         }
 
@@ -197,7 +197,7 @@ public sealed partial class CusNode
             reason = why;
             // L'attesa vale per i rifiuti dell'utente, le richieste scadute e quelle annullate da chi
             // chiedeva; non quando è l'host a smettere di offrirsi o la coda è piena.
-            if (decision == ConsentDecision.Reject && why is null or "richiesta rifiutata" or "nessuna risposta" or "richiesta annullata")
+            if (decision == ConsentDecision.Reject && (why is null || WireTexts.RequestDeclined.Matches(why) || WireTexts.NoAnswer.Matches(why) || WireTexts.RequestCancelled.Matches(why)))
                 StartJoinCooldown(connection);
             if (decision != ConsentDecision.Reject)
             {
@@ -205,10 +205,10 @@ public sealed partial class CusNode
                 await _gate.WaitAsync();
                 try
                 {
-                    reason = _memberSession is not null ? $"{Identity.DisplayName} è già in una condivisione"
-                        : _hostSession is null ? "l'host ha chiuso la sessione"
-                        : _hostSession.Members.ContainsKey(remote.DeviceId) ? "sei già nella sessione"
-                        : connection.IsClosed ? "richiesta annullata"
+                    reason = _memberSession is not null ? WireTexts.AlreadyInSession.Format(Identity.DisplayName)
+                        : _hostSession is null ? WireTexts.HostClosedSession.Text
+                        : _hostSession.Members.ContainsKey(remote.DeviceId) ? WireTexts.YouAreAlreadyIn.Text
+                        : connection.IsClosed ? WireTexts.RequestCancelled.Text
                         : null;
                     if (reason is null)
                         await AdmitAsync(connection, granted);
@@ -226,8 +226,8 @@ public sealed partial class CusNode
             }
         }
 
-        reason ??= "richiesta rifiutata";
-        Log($"Richiesta di {remote.DisplayName} rifiutata: {reason}.");
+        reason ??= WireTexts.RequestDeclined.Text;
+        Log(Loc.T("session.requestFromDeclined", remote.DisplayName, reason));
         try
         {
             await connection.SendAsync(new JoinReplyMessage(false, null, ShareDirection.Bidirectional, reason));
@@ -237,7 +237,7 @@ public sealed partial class CusNode
             // Chi chiedeva se n'è già andato.
         }
 
-        connection.Close("richiesta rifiutata");
+        connection.Close(WireTexts.RequestDeclined.Text);
     }
 
     /// <summary>Chiavi "id:" e "ip:" con la scadenza dell'attesa. Ripulite quando si aggiungono voci.</summary>
@@ -290,14 +290,14 @@ public sealed partial class CusNode
     {
         var remote = connection.Remote;
         if (_pendingJoins.Count >= MaxPendingJoins)
-            return (ConsentDecision.Reject, "troppe richieste in attesa, riprova tra poco");
+            return (ConsentDecision.Reject, WireTexts.TooManyRequests.Text);
 
         var imitated = ImitatedFriend(remote);
         var pending = new PendingJoin(new JoinRequestView(NewId(), remote.DeviceId, remote.DisplayName, remote.UserName, remote.Fingerprint, DateTimeOffset.UtcNow, imitated));
         _pendingJoins[pending.View.RequestId] = pending;
-        connection.Closed += (_, _) => pending.Decide(ConsentDecision.Reject, "richiesta annullata");
+        connection.Closed += (_, _) => pending.Decide(ConsentDecision.Reject, WireTexts.RequestCancelled.Text);
         JoinRequestsChanged?.Invoke(this, EventArgs.Empty);
-        Log($"{remote.DisplayName} chiede di entrare.");
+        Log(Loc.T("session.asksToJoin", remote.DisplayName));
 
         using var prompt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         try
@@ -311,7 +311,7 @@ public sealed partial class CusNode
                     try
                     {
                         var decision = await _consent.AskAsync(new ConsentRequest(remote.DisplayName, remote.UserName, remote.Fingerprint, imitated), prompt.Token);
-                        pending.Decide(decision, decision == ConsentDecision.Reject ? "richiesta rifiutata" : null);
+                        pending.Decide(decision, decision == ConsentDecision.Reject ? WireTexts.RequestDeclined.Text : null);
                     }
                     catch (OperationCanceledException)
                     {
@@ -329,7 +329,7 @@ public sealed partial class CusNode
             }
             else
             {
-                _notifier.Info($"{remote.DisplayName} chiede di entrare: rispondi dall'elenco delle richieste.");
+                _notifier.Info(Loc.T("session.asksToJoinAnswerFromThe", remote.DisplayName));
             }
 
             try
@@ -338,7 +338,7 @@ public sealed partial class CusNode
             }
             catch (TimeoutException)
             {
-                return (ConsentDecision.Reject, "nessuna risposta");
+                return (ConsentDecision.Reject, WireTexts.NoAnswer.Text);
             }
         }
         finally
@@ -371,8 +371,8 @@ public sealed partial class CusNode
     {
         await BroadcastStateAsync();
         Log(granted == ShareDirection.ReadOnly
-            ? $"{name} è entrato in sola lettura: riceve le copie della sessione ma non invia le sue."
-            : $"{name} è entrato: clipboard condivisa.");
+            ? Loc.T("session.joinedReadOnlyReceivesTheSession", name)
+            : Loc.T("session.joinedClipboardShared", name));
     }
 
     // ================================================================ host: permessi
@@ -387,7 +387,7 @@ public sealed partial class CusNode
         try
         {
             if (_hostSession?.Members.TryGetValue(deviceId, out var member) != true)
-                throw new CusOperationException("Il dispositivo non è più nella sessione.");
+                throw new CusOperationException(Loc.T("common.theDeviceIsNoLongerIn"));
             member!.Granted = granted;
             name = member.Connection.Remote.DisplayName;
             RaiseSessionChanged();
@@ -398,7 +398,7 @@ public sealed partial class CusNode
         }
 
         await BroadcastStateAsync();
-        Log(granted == ShareDirection.ReadOnly ? $"{name} ora è in sola lettura." : $"{name} ora ha accesso bidirezionale.");
+        Log(granted == ShareDirection.ReadOnly ? Loc.T("session.isNowReadOnly", name) : Loc.T("session.nowHasTwoWayAccess", name));
     }
 
     /// <summary>
@@ -411,7 +411,7 @@ public sealed partial class CusNode
         try
         {
             if (_hostSession is not { } session)
-                throw new CusOperationException("Non stai ospitando una condivisione.");
+                throw new CusOperationException(Loc.T("session.youArenTHostingASession"));
             session.SensitiveForAll = enabled;
             RaiseSessionChanged();
         }
@@ -422,8 +422,8 @@ public sealed partial class CusNode
 
         await BroadcastStateAsync();
         Log(enabled
-            ? "Contenuti sensibili visibili a tutti i membri, fino alla fine della sessione."
-            : "Contenuti sensibili solo ai membri affidabili.");
+            ? Loc.T("session.sensitiveContentVisibleToAllMembers")
+            : Loc.T("session.sensitiveContentOnlyToTrustedMembers"));
     }
 
     // ================================================================ host: copie
@@ -442,25 +442,25 @@ public sealed partial class CusNode
             // Sola lettura: il membro riceve le copie della sessione ma le sue non entrano, anche se
             // le manda comunque. La conferma serve lo stesso, come per ogni copia ignorata.
             case ClipboardPushMessage push when member.Direction == ShareDirection.ReadOnly:
-                Log($"Copia di {connection.Remote.DisplayName} ignorata: partecipa in sola lettura");
+                Log(Loc.T("session.copyFromIgnoredParticipatingReadOnly", connection.Remote.DisplayName));
                 if (push.ItemId is { Length: <= 64 })
                     await AcknowledgeIgnoredPushAsync(connection, push.ItemId);
                 break;
             case ClipboardPushMessage push:
-                var why = push.ItemId is null || push.Content is null ? "messaggio incompleto"
-                    : !IsValidItemId(push.ItemId) ? "identificativo non valido"
+                var why = push.ItemId is null || push.Content is null ? Loc.T("session.incompleteMessage")
+                    : !IsValidItemId(push.ItemId) ? Loc.T("session.invalidIdentifier")
                     : IsAcceptableContent(push.Content, out var reason) ? null : reason;
                 if (why is not null)
                 {
-                    Log($"Copia di {connection.Remote.DisplayName} ignorata: {why}");
+                    Log(Loc.T("session.copyFromIgnored", connection.Remote.DisplayName, why));
                     if (push.ItemId is { Length: <= 64 })
                         await AcknowledgeIgnoredPushAsync(connection, push.ItemId);
                     return;
                 }
 
                 Log(push.Sensitive
-                    ? $"Ricevuto da {connection.Remote.DisplayName}: contenuto sensibile"
-                    : $"Ricevuto da {connection.Remote.DisplayName}: {Short(push.Content!)}");
+                    ? Loc.T("session.receivedFromSensitiveContent", connection.Remote.DisplayName)
+                    : Loc.T("session.receivedFrom", connection.Remote.DisplayName, Short(push.Content!)));
                 var recipients = push.Sensitive
                     ? (push.SensitiveRecipients ?? []).Where(id => id is { Length: 32 }).Take(MaxParticipants).ToHashSet(StringComparer.OrdinalIgnoreCase)
                     : null;
@@ -483,8 +483,8 @@ public sealed partial class CusNode
 
                 await BroadcastStateAsync();
                 Log(set.Direction == ShareDirection.ReadOnly
-                    ? $"{connection.Remote.DisplayName} è passato in sola lettura."
-                    : $"{connection.Remote.DisplayName} è tornato bidirezionale.");
+                    ? Loc.T("session.switchedToReadOnly", connection.Remote.DisplayName)
+                    : Loc.T("session.isBackToTwoWay", connection.Remote.DisplayName));
                 break;
             case RenameMessage rename:
                 // Un nome più lungo di quello che l'interfaccia permette non è di un client onesto.
@@ -522,15 +522,15 @@ public sealed partial class CusNode
 
                 if (refused is not null)
                 {
-                    Log($"{oldName} ha provato a chiamarsi {newName}, ma somiglia a {refused}: nome rifiutato.");
+                    Log(Loc.T("session.triedToRenameToButIt", oldName, newName, refused));
                     return;
                 }
 
                 await BroadcastStateAsync();
-                Log($"{oldName} ora si chiama {newName}.");
+                Log(Loc.T("session.isNowCalled", oldName, newName));
                 break;
             case LeaveSessionMessage:
-                connection.Close("uscito dalla sessione");
+                connection.Close(Loc.T("session.leftTheSession"));
                 break;
             case HistoryRequestMessage request:
                 await connection.SendAsync(new HistoryReplyMessage(request.RequestId, SessionHistoryPreviews(connection)));
@@ -598,9 +598,9 @@ public sealed partial class CusNode
         HistoryEntry? entry = null;
         string? error = null;
         if (session is null || !session.Members.Values.Any(m => m.Connection == connection))
-            error = "Richiesta non autorizzata: il dispositivo non è nella sessione.";
+            error = WireTexts.NotInSession.Text;
         else if ((entry = _database.GetHistoryEntry(request.ItemId)) is null || entry.SessionId != session.Id)
-            error = "Voce non più presente nella cronologia della sessione.";
+            error = WireTexts.HistoryItemGone.Text;
 
         try
         {
@@ -608,7 +608,7 @@ public sealed partial class CusNode
         }
         catch (MessageTooLargeException)
         {
-            await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, null, "Voce troppo grande per essere inviata."));
+            await connection.SendAsync(new HistoryItemReplyMessage(request.RequestId, null, WireTexts.HistoryItemTooLarge.Text));
         }
     }
 
@@ -639,8 +639,8 @@ public sealed partial class CusNode
     {
         if (member.Outbox.TryEnqueue(message, bytes ?? message.Serialize().Length))
             return;
-        Log($"{member.Connection.Remote.DisplayName} non riceve le copie abbastanza in fretta: scollegato.");
-        member.Connection.Close("troppo lento a ricevere le copie");
+        Log(Loc.T("session.isnTReceivingCopiesFastEnough", member.Connection.Remote.DisplayName));
+        member.Connection.Close(Loc.T("session.tooSlowReceivingCopies"));
     }
 
     /// <summary>
@@ -667,7 +667,7 @@ public sealed partial class CusNode
             // la voce di un altro PC.
             if (originConnection is not null && (session.ItemOrigins.ContainsKey(itemId) || _database.GetHistoryEntry(itemId) is not null))
             {
-                Log($"Copia di {originName} ignorata: identificativo già usato");
+                Log(Loc.T("session.copyFromIgnoredIdentifierAlreadyUsed", originName));
                 return -1;
             }
 
@@ -680,7 +680,7 @@ public sealed partial class CusNode
             var itemBytes = item.Serialize().Length;
             if (originConnection is null && itemBytes > SecureChannel.MaxMessageBytes)
             {
-                _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
+                _notifier.Error(Loc.T("session.copyNotSharedTooLargeTo"));
                 return -1;
             }
 
@@ -703,7 +703,7 @@ public sealed partial class CusNode
                 {
                     // La clipboard dell'host può essere occupata da un altro programma: la copia va
                     // comunque confermata e distribuita, altrimenti il membro resterebbe bloccato.
-                    _notifier.Error($"Impossibile scrivere nella clipboard: {ex.Message}");
+                    _notifier.Error(Loc.T("session.canTWriteToTheClipboard", ex.Message));
                 }
 
                 acknowledged = true;
@@ -728,7 +728,7 @@ public sealed partial class CusNode
         }
         catch (Exception ex)
         {
-            _notifier.Error($"Distribuzione della copia non riuscita: {ex.Message}");
+            _notifier.Error(Loc.T("session.distributingTheCopyFailed", ex.Message));
             return -1;
         }
         finally
@@ -752,7 +752,7 @@ public sealed partial class CusNode
             {
                 session.Members.TryRemove(connection.Remote.DeviceId, out _);
                 changed = true;
-                Log($"{connection.Remote.DisplayName} è uscito dalla sessione ({reason}).");
+                Log(Loc.T("session.leftTheSession2", connection.Remote.DisplayName, reason));
 
                 // Senza membri la sessione finisce. Mentre ci si offre ne parte subito una nuova, vuota:
                 // chi entra dopo non eredita la cronologia né il permesso temporaneo per le password
@@ -760,7 +760,7 @@ public sealed partial class CusNode
                 if (session.Members.IsEmpty)
                 {
                     _hostSession = session.Offered ? new HostSession(NewId()) { Offered = true } : null;
-                    Log("Nessun membro rimasto: sessione terminata.");
+                    Log(Loc.T("session.noMembersLeftSessionEnded"));
                 }
 
                 RaiseSessionChanged();
@@ -806,15 +806,15 @@ public sealed partial class CusNode
     public async Task<JoinResult> JoinAsync(string host, int port, string? expectedDeviceId = null, CancellationToken cancellationToken = default)
     {
         if (Interlocked.CompareExchange(ref _joining, 1, 0) != 0)
-            throw new CusOperationException("C'è già una richiesta di ingresso in corso.");
+            throw new CusOperationException(Loc.T("session.aJoinRequestIsAlreadyIn"));
         var wasVisible = _visible;
         var joined = false;
         try
         {
             if (_memberSession is not null)
-                throw new CusOperationException("Sei già in una condivisione: esci prima di entrare in un'altra.");
+                throw new CusOperationException(Loc.T("session.youAreAlreadyInASession"));
             if (_hostSession is { Members.IsEmpty: false })
-                throw new CusOperationException("Stai ospitando una condivisione: chiudila prima di entrare in un'altra.");
+                throw new CusOperationException(Loc.T("session.youAreHostingASessionClose"));
 
             // Chi entra in una sessione altrui smette di offrirsi.
             if (_visible)
@@ -824,15 +824,14 @@ public sealed partial class CusNode
             var remote = connection.Remote;
             if (expectedDeviceId is not null && !string.Equals(remote.DeviceId, expectedDeviceId, StringComparison.OrdinalIgnoreCase))
             {
-                connection.Close("identità diversa da quella annunciata");
+                connection.Close(Loc.T("session.identityDiffersFromTheAnnouncedOne"));
                 throw new CusOperationException(
-                    $"Il dispositivo a {new PeerEndpoint(host, port)} non è quello scelto: la sua identità ({remote.Fingerprint}) "
-                    + "non corrisponde a quella annunciata in rete. Richiesta annullata.");
+                    Loc.T("session.theDeviceAtIsnTThe", new PeerEndpoint(host, port), remote.Fingerprint));
             }
 
             if (ImitatedFriend(remote) is { } imitated)
-                _notifier.Error($"Attenzione: {remote.DisplayName} (impronta {remote.Fingerprint}) non è il tuo amico {imitated}, anche se si chiama come lui.");
-            Log($"Richiesta di ingresso inviata a {remote.DisplayName} (impronta {remote.Fingerprint}): in attesa della risposta...");
+                _notifier.Error(Loc.T("session.warningFingerprintIsNotYourFriend", remote.DisplayName, remote.Fingerprint, imitated));
+            Log(Loc.T("session.joinRequestSentToFingerprintWaiting", remote.DisplayName, remote.Fingerprint));
             JoinReplyMessage reply;
             try
             {
@@ -841,15 +840,15 @@ public sealed partial class CusNode
             }
             catch (Exception ex) when (ex is not CusOperationException)
             {
-                connection.Close("errore");
-                throw new CusOperationException($"Richiesta a {remote.DisplayName} non riuscita: {Describe(ex)}", ex);
+                connection.Close(Loc.T("session.error"));
+                throw new CusOperationException(Loc.T("session.requestToFailed", remote.DisplayName, Describe(ex)), ex);
             }
 
             if (!reply.Accepted)
             {
-                var reason = DisplayText.Sanitize(reply.Reason, 200, "richiesta rifiutata");
-                connection.Close("rifiutata");
-                Log($"{remote.DisplayName} ha rifiutato: {reason}.");
+                var reason = WireTexts.Localize(DisplayText.Sanitize(reply.Reason, 200, WireTexts.RequestDeclined.Text));
+                connection.Close(Loc.T("session.declined"));
+                Log(Loc.T("session.declined2", remote.DisplayName, reason));
                 return new JoinResult(JoinOutcome.Rejected, remote.DisplayName, reason);
             }
 
@@ -861,8 +860,8 @@ public sealed partial class CusNode
                 // Nel frattempo questo PC può essere diventato host (un amico si è collegato).
                 if (_memberSession is not null || _hostSession is { Members.IsEmpty: false })
                 {
-                    await connection.CloseAsync("già in un'altra sessione");
-                    throw new CusOperationException("Nel frattempo è iniziata un'altra condivisione su questo PC.");
+                    await connection.CloseAsync(WireTexts.InAnotherSession.Text);
+                    throw new CusOperationException(Loc.T("session.meanwhileAnotherSessionStartedOnThis"));
                 }
 
                 _hostSession = null;
@@ -880,8 +879,8 @@ public sealed partial class CusNode
 
             joined = true;
             Log(granted == ShareDirection.ReadOnly
-                ? $"Sei entrato nella condivisione di {remote.DisplayName} in sola lettura."
-                : $"Sei entrato nella condivisione di {remote.DisplayName}.");
+                ? Loc.T("session.youJoinedSSessionReadOnly", remote.DisplayName)
+                : Loc.T("session.youJoinedSSession", remote.DisplayName));
             return new JoinResult(granted == ShareDirection.ReadOnly ? JoinOutcome.AcceptedReadOnly : JoinOutcome.Accepted, remote.DisplayName, null);
         }
         finally
@@ -915,9 +914,9 @@ public sealed partial class CusNode
         try
         {
             if (_memberSession is not { } current)
-                throw new CusOperationException("Non sei membro di una condivisione.");
+                throw new CusOperationException(Loc.T("session.youArenTAMemberOf"));
             if (direction == ShareDirection.Bidirectional && current.Granted == ShareDirection.ReadOnly)
-                throw new CusOperationException("L'host ti ha concesso solo la sola lettura.");
+                throw new CusOperationException(Loc.T("session.theHostGrantedYouReadOnly"));
             session = current;
             session.Chosen = direction;
             RaiseSessionChanged();
@@ -937,8 +936,8 @@ public sealed partial class CusNode
         }
 
         Log(direction == ShareDirection.ReadOnly
-            ? "Sola lettura: ricevi le copie della sessione, le tue restano su questo PC."
-            : "Bidirezionale: le tue copie tornano a essere condivise.");
+            ? Loc.T("session.readOnlyYouReceiveTheSession")
+            : Loc.T("session.twoWayYourCopiesAreShared"));
     }
 
     private Task ToggleMyDirectionAsync() =>
@@ -1001,7 +1000,7 @@ public sealed partial class CusNode
                 RunInBackground(() => HandleAgreementProposalAsync(connection, proposal));
                 break;
             case SessionEndedMessage ended:
-                _notifier.Info($"Sessione terminata: {DisplayText.Sanitize(ended.Reason, 200, "chiusa dall'host")}.");
+                _notifier.Info(Loc.T("session.sessionEnded2", WireTexts.Localize(DisplayText.Sanitize(ended.Reason, 200, Loc.T("session.closedByTheHost")))));
                 if (_memberSession is { } current && current.Host == connection)
                     current.EndedByHost = true;
                 connection.Close(ended.Reason);
@@ -1013,13 +1012,13 @@ public sealed partial class CusNode
     {
         if (item.Content is null || !IsValidItemId(item.ItemId))
         {
-            Log("Copia ignorata: messaggio incompleto");
+            Log(Loc.T("session.copyIgnoredIncompleteMessage"));
             return;
         }
 
         if (!IsAcceptableContent(item.Content, out var why))
         {
-            Log($"Copia ignorata: {why}");
+            Log(Loc.T("session.copyIgnored", why));
             return;
         }
 
@@ -1043,7 +1042,7 @@ public sealed partial class CusNode
         }
         catch (Exception ex)
         {
-            _notifier.Error($"Impossibile scrivere nella clipboard: {ex.Message}");
+            _notifier.Error(Loc.T("session.canTWriteToTheClipboard", ex.Message));
             return;
         }
         finally
@@ -1051,7 +1050,7 @@ public sealed partial class CusNode
             _gate.Release();
         }
 
-        Log(item.Sensitive ? $"Ricevuto da {originName}: contenuto sensibile" : $"Ricevuto da {originName}: {Short(item.Content)}");
+        Log(item.Sensitive ? Loc.T("session.receivedFromSensitiveContent", originName) : Loc.T("session.receivedFrom", originName, Short(item.Content)));
     }
 
     private async Task OnHostClosedAsync(PeerConnection connection, string reason)
@@ -1073,9 +1072,9 @@ public sealed partial class CusNode
         }
 
         if (ended is not null && !ended.Leaving && !ended.EndedByHost)
-            _notifier.Info($"L'host {connection.Remote.DisplayName} si è disconnesso: sessione terminata ({reason}).");
+            _notifier.Info(Loc.T("session.theHostDisconnectedSessionEnded", connection.Remote.DisplayName, reason));
         if (ended is not null)
-            Log("Sessione terminata.");
+            Log(Loc.T("session.sessionEnded"));
     }
 
     // ================================================================ comuni
@@ -1108,7 +1107,7 @@ public sealed partial class CusNode
         }
 
         foreach (var pending in rejected)
-            pending.Decide(ConsentDecision.Reject, "l'host ha chiuso la sessione");
+            pending.Decide(ConsentDecision.Reject, WireTexts.HostClosedSession.Text);
 
         if (wasVisible && _discovery is { } discovery)
             await TryAnnounceAsync(() => discovery.AnnounceHiddenAsync(
@@ -1120,14 +1119,14 @@ public sealed partial class CusNode
             {
                 try
                 {
-                    await m.Connection.SendAsync(new SessionEndedMessage("l'host ha chiuso la sessione"));
+                    await m.Connection.SendAsync(new SessionEndedMessage(WireTexts.HostClosedSession.Text));
                 }
                 catch (IOException)
                 {
                     // Già caduto.
                 }
 
-                m.Connection.Close("sessione chiusa dall'host");
+                m.Connection.Close(Loc.T("session.sessionClosedByTheHost"));
             }
         }
 
@@ -1142,11 +1141,11 @@ public sealed partial class CusNode
                 // Host già caduto.
             }
 
-            member.Host.Close("uscito dalla sessione");
+            member.Host.Close(Loc.T("session.leftTheSession"));
         }
 
         if (host is { Members.IsEmpty: false } || member is not null)
-            Log("Sessione terminata.");
+            Log(Loc.T("session.sessionEnded"));
     }
 
     private async Task OnLocalClipboardChangedAsync(ClipboardChangedEventArgs e)
@@ -1178,7 +1177,7 @@ public sealed partial class CusNode
 
         if (!IsAcceptableContent(content, out var why))
         {
-            _notifier.Error($"Copia non condivisa: {why}");
+            _notifier.Error(Loc.T("common.copyNotShared", why));
             return false;
         }
 
@@ -1188,13 +1187,15 @@ public sealed partial class CusNode
             if (sensitive)
             {
                 Log(sent > 0
-                    ? $"Contenuto sensibile condiviso con {sent} {(sent == 1 ? "membro affidabile" : "membri")}."
-                    : "Contenuto sensibile: nessun membro può vederlo, resta su questo PC.");
+                    ? sent == 1
+                        ? Loc.T("session.sensitiveContentSharedWithTrustedMember")
+                        : Loc.T("session.sensitiveContentSharedWithMembers", sent)
+                    : Loc.T("session.sensitiveContentNoMemberCanSee"));
                 return sent > 0;
             }
 
             if (sent >= 0)
-                Log($"Condiviso: {Short(content)}");
+                Log(Loc.T("session.shared", Short(content)));
             return sent >= 0;
         }
 
@@ -1209,7 +1210,7 @@ public sealed partial class CusNode
             var hostId = member.Host.Remote.DeviceId;
             if (!Friends.TrustsWithSensitive(hostId))
             {
-                Log("Contenuto marcato come sensibile: l'host non è tra i tuoi affidabili, resta su questo PC.");
+                Log(Loc.T("session.contentMarkedAsSensitiveTheHost"));
                 return false;
             }
 
@@ -1224,13 +1225,13 @@ public sealed partial class CusNode
         try
         {
             await member.Host.SendAsync(new ClipboardPushMessage(itemId, content, sensitive, recipients));
-            Log(sensitive ? "Inviato all'host: contenuto sensibile" : $"Inviato all'host: {Short(content)}");
+            Log(sensitive ? Loc.T("session.sentToTheHostSensitiveContent") : Loc.T("session.sentToTheHost", Short(content)));
             return true;
         }
         catch (MessageTooLargeException)
         {
             await SetPendingPushAsync(member, itemId, pending: false);
-            _notifier.Error("Copia non condivisa: troppo grande per essere inviata.");
+            _notifier.Error(Loc.T("session.copyNotSharedTooLargeTo"));
         }
         catch (IOException)
         {
@@ -1279,7 +1280,7 @@ public sealed partial class CusNode
         if (entry.IsPreview)
             entry = await LoadFullHistoryEntryAsync(entry);
         if (!IsAcceptableContent(entry.Content, out var why))
-            throw new CusOperationException($"Voce della cronologia non utilizzabile: {why}.");
+            throw new CusOperationException(Loc.T("session.historyItemNotUsable", why));
 
         IRemoteFileSource? source = null;
         if (entry.Content.Kind == ClipboardContentKind.Files)
@@ -1287,7 +1288,7 @@ public sealed partial class CusNode
             if (entry.OriginDeviceId == Identity.DeviceId)
             {
                 if (!IsCurrentOffer(entry.ItemId))
-                    throw new CusOperationException("I file non sono più disponibili: su questo PC è stato copiato altro.");
+                    throw new CusOperationException(Loc.T("session.theFilesAreNoLongerAvailable"));
                 source = new LocalFileSource(this, entry.ItemId);
             }
             else if (_memberSession is { } member)
@@ -1300,7 +1301,7 @@ public sealed partial class CusNode
             }
             else
             {
-                throw new CusOperationException("Il PC d'origine non è più nella sessione: i file non sono recuperabili.");
+                throw new CusOperationException(Loc.T("session.theSourcePcIsNoLonger"));
             }
         }
 
@@ -1320,18 +1321,18 @@ public sealed partial class CusNode
             }
             catch (Exception ex) when (ex is IOException or OperationCanceledException)
             {
-                throw new CusOperationException("L'host non risponde: voce della cronologia non recuperata.", ex);
+                throw new CusOperationException(Loc.T("session.theHostIsnTRespondingHistory"), ex);
             }
 
             if (reply.Error is not null || reply.Entry is null)
-                throw new CusOperationException(DisplayText.Sanitize(reply.Error, 200, "Voce della cronologia non disponibile."));
+                throw new CusOperationException(WireTexts.Localize(DisplayText.Sanitize(reply.Error, 200, Loc.T("session.historyItemNotAvailable"))));
             if (reply.Entry.ItemId != preview.ItemId || reply.Entry.IsPreview || reply.Entry.Content is null)
-                throw new CusOperationException("Risposta dell'host non valida.");
+                throw new CusOperationException(Loc.T("session.invalidReplyFromTheHost"));
             return reply.Entry;
         }
 
         return _database.GetHistoryEntry(preview.ItemId)
-            ?? throw new CusOperationException("Voce non più presente nella cronologia.");
+            ?? throw new CusOperationException(Loc.T("session.itemNoLongerInTheHistory"));
     }
 
     /// <summary>
@@ -1346,21 +1347,21 @@ public sealed partial class CusNode
         if (executables.Count == 0)
             return;
         var shown = string.Join(", ", executables.Take(3).Select(n => DisplayText.Sanitize(n, 60, "?")))
-            + (executables.Count > 3 ? $" e altri {executables.Count - 3}" : "");
-        _notifier.Error($"Attenzione: {originName} ha condiviso file che avviano programmi ({shown}). Aprili solo se ti fidi.");
+            + (executables.Count > 3 ? Loc.T("session.andMore", executables.Count - 3) : "");
+        _notifier.Error(Loc.T("session.warningSharedFilesThatLaunchPrograms", originName, shown));
     }
 
     private static bool IsAcceptableContent(ClipboardContent content, out string reason)
     {
         reason = content.Kind switch
         {
-            ClipboardContentKind.Image when content.ImagePng is not { Length: > 0 } => "immagine vuota",
-            ClipboardContentKind.Image when content.ImagePng.Length > MaxImageBytes => $"immagine troppo grande (oltre {MaxImageBytes / 1024 / 1024} MB)",
-            ClipboardContentKind.Text when content.Text is null => "testo vuoto",
-            ClipboardContentKind.Text when content.Text.Length > MaxTextChars => "testo troppo lungo",
+            ClipboardContentKind.Image when content.ImagePng is not { Length: > 0 } => Loc.T("session.emptyImage"),
+            ClipboardContentKind.Image when content.ImagePng.Length > MaxImageBytes => Loc.T("session.imageTooLargeOverMb", MaxImageBytes / 1024 / 1024),
+            ClipboardContentKind.Text when content.Text is null => Loc.T("session.emptyText"),
+            ClipboardContentKind.Text when content.Text.Length > MaxTextChars => Loc.T("session.textTooLong"),
             ClipboardContentKind.Files when !ClipboardFileNames.TryValidate(content.Files, out var fileReason) => fileReason,
             ClipboardContentKind.Text or ClipboardContentKind.Image or ClipboardContentKind.Files => "",
-            _ => "tipo di contenuto sconosciuto",
+            _ => Loc.T("session.unknownContentType"),
         };
         return reason.Length == 0;
     }
@@ -1493,7 +1494,7 @@ public sealed partial class CusNode
                     }
                     catch (MessageTooLargeException)
                     {
-                        log($"Copia non inviata a {connection.Remote.DisplayName}: troppo grande.");
+                        log(Loc.T("session.copyNotSentToTooLarge", connection.Remote.DisplayName));
                     }
                     finally
                     {
@@ -1584,7 +1585,7 @@ public sealed partial class CusNode
             try
             {
                 if (connection.IsClosed)
-                    throw new RemoteFileUnavailableException("Il PC d'origine non è raggiungibile: la sessione è terminata.");
+                    throw new RemoteFileUnavailableException(WireTexts.OriginUnreachable.Text);
 
                 FileReadReplyMessage reply;
                 try
@@ -1595,15 +1596,15 @@ public sealed partial class CusNode
                 }
                 catch (IOException)
                 {
-                    throw new RemoteFileUnavailableException("Il PC d'origine non è raggiungibile: la sessione è terminata.");
+                    throw new RemoteFileUnavailableException(WireTexts.OriginUnreachable.Text);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    throw new RemoteFileUnavailableException("Il PC d'origine non risponde.");
+                    throw new RemoteFileUnavailableException(WireTexts.OriginNotResponding.Text);
                 }
 
                 if (reply.Error is not null)
-                    throw new RemoteFileUnavailableException(DisplayText.Sanitize(reply.Error, 300, "errore sul PC d'origine"));
+                    throw new RemoteFileUnavailableException(WireTexts.Localize(DisplayText.Sanitize(reply.Error, 300, WireTexts.OriginError.Text)));
 
                 // Mai più byte di quelli chiesti, anche se l'altro PC ne manda di più.
                 var data = reply.Data ?? [];
@@ -1612,7 +1613,7 @@ public sealed partial class CusNode
             }
             catch (RemoteFileUnavailableException ex) when (notify)
             {
-                node._notifier.Error($"Impossibile incollare: {ex.Message}");
+                node._notifier.Error(Loc.T("session.canTPaste", ex.Message));
                 throw;
             }
         }
@@ -1624,6 +1625,6 @@ public sealed partial class CusNode
         public Task<byte[]> ReadAsync(int fileIndex, long offset, int count, CancellationToken cancellationToken = default) =>
             node.TryReadLocalOffer(itemId, fileIndex, offset, count, node.Identity.DeviceId, node.Identity.DisplayName, out var data)
                 ? Task.FromResult(data)
-                : throw new RemoteFileUnavailableException("Su questo PC è stato copiato altro: i file non sono più disponibili.");
+                : throw new RemoteFileUnavailableException(Loc.T("session.somethingElseWasCopiedOnThis"));
     }
 }

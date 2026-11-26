@@ -49,11 +49,11 @@ public abstract record CusMessage
         try
         {
             return JsonSerializer.Deserialize<CusMessage>(data, Options)
-                ?? throw new ProtocolException("Messaggio vuoto.");
+                ?? throw new ProtocolException(Loc.T("net.emptyMessage"));
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            throw new ProtocolException($"Messaggio non valido: {ex.Message}");
+            throw new ProtocolException(Loc.T("net.invalidMessage", ex.Message));
         }
     }
 }

@@ -48,7 +48,7 @@ public sealed partial class CusNode
                 return;
             record.State = TransferState.Cancelled;
             record.LastActivity = DateTimeOffset.UtcNow;
-            Log($"Trasferimento di {record.ItemName} a {record.RequesterName} annullato.");
+            Log(Loc.T("transfers.transferOfToCancelled", record.ItemName, record.RequesterName));
         }
 
         OnTransfersChanged(force: true);
@@ -116,11 +116,11 @@ public sealed partial class CusNode
             {
                 // Copie fatte in sola lettura (o sensibili non concesse) non sono mai uscite da qui.
                 if (!offer.Shared)
-                    throw new RemoteFileUnavailableException("Richiesta non autorizzata: questi file non sono stati condivisi (copiati in sola lettura).");
+                    throw new RemoteFileUnavailableException(WireTexts.NotShared.Text);
 
                 _transfers.TryGetValue((itemId, requesterId), out record);
                 if (record?.State == TransferState.Cancelled)
-                    throw new RemoteFileUnavailableException($"Trasferimento annullato da {Identity.DisplayName}.");
+                    throw new RemoteFileUnavailableException(WireTexts.TransferCancelledBy.Format(Identity.DisplayName));
 
                 // Un trasferimento in corso continua anche se nel frattempo qui si è copiato altro;
                 // uno nuovo parte solo dall'offerta corrente.
@@ -152,9 +152,9 @@ public sealed partial class CusNode
 
         IReadOnlyList<ClipboardFileInfo> files = offer.Files;
         if (fileIndex < 0 || fileIndex >= files.Count || files[fileIndex].LocalPath is not { } path)
-            throw new RemoteFileUnavailableException("File richiesto non valido.");
+            throw new RemoteFileUnavailableException(WireTexts.InvalidFileRequested.Text);
         if (offset < 0 || count <= 0)
-            throw new RemoteFileUnavailableException("Intervallo richiesto non valido.");
+            throw new RemoteFileUnavailableException(WireTexts.InvalidRange.Text);
 
         count = Math.Min(count, MaxFileReadBytes);
         try
@@ -170,7 +170,7 @@ public sealed partial class CusNode
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new RemoteFileUnavailableException($"Il file '{files[fileIndex].Name}' non è più leggibile sul PC d'origine: {ex.Message}");
+            throw new RemoteFileUnavailableException(WireTexts.FileNoLongerReadable.Format(files[fileIndex].Name, ex.Message));
         }
 
         if (record is not null)
@@ -186,7 +186,7 @@ public sealed partial class CusNode
             }
 
             if (finished)
-                Log($"{record.ItemName} trasferito a {record.RequesterName}.");
+                Log(Loc.T("transfers.transferredTo", record.ItemName, record.RequesterName));
             OnTransfersChanged(force: finished);
         }
 
@@ -207,7 +207,7 @@ public sealed partial class CusNode
         }
         catch (Exception ex)
         {
-            reply = new FileReadReplyMessage(request.RequestId, null, $"Lettura del file non riuscita sul PC d'origine: {ex.Message}");
+            reply = new FileReadReplyMessage(request.RequestId, null, WireTexts.FileReadFailed.Format(ex.Message));
         }
 
         await SendFileReadReplyAsync(connection, reply);
@@ -233,7 +233,7 @@ public sealed partial class CusNode
     private async Task<(bool Found, byte[] Data)> ReadLocalOfferAsync(FileReadRequestMessage request, string requesterId, string requesterName)
     {
         if (!await _fileReadSlots.WaitAsync(FileReadTimeout, _lifetime.Token))
-            throw new RemoteFileUnavailableException("Il PC d'origine è occupato a servire altre letture: riprova.");
+            throw new RemoteFileUnavailableException(WireTexts.OriginBusy.Text);
         try
         {
             var found = TryReadLocalOffer(request.ItemId!, request.FileIndex, request.Offset, request.Count, requesterId, requesterName, out var data);
@@ -252,7 +252,7 @@ public sealed partial class CusNode
         var fromMember = host?.Members.Values.Any(m => m.Connection == connection) == true;
         var fromHost = member?.Host == connection;
         if (!fromMember && !fromHost)
-            throw new RemoteFileUnavailableException("Richiesta non autorizzata: il dispositivo non è nella sessione.");
+            throw new RemoteFileUnavailableException(WireTexts.NotInSession.Text);
 
         // Chi incolla davvero: il dispositivo collegato, o quello per cui l'host inoltra (solo l'host
         // può inoltrare: un membro che lo dichiara viene ignorato).
@@ -261,7 +261,7 @@ public sealed partial class CusNode
             : (connection.Remote.DeviceId, connection.Remote.DisplayName);
 
         if (request.ItemId is null)
-            throw new RemoteFileUnavailableException("Richiesta non valida.");
+            throw new RemoteFileUnavailableException(WireTexts.InvalidRequest.Text);
         var (found, data) = await ReadLocalOfferAsync(request, requesterId, requesterName);
         if (found)
             return data;
@@ -274,14 +274,14 @@ public sealed partial class CusNode
             if (originId is not null && originId != Identity.DeviceId)
             {
                 if (!host.Members.TryGetValue(originId, out var origin) || origin.Connection == connection)
-                    throw new RemoteFileUnavailableException("Il PC d'origine non è più nella sessione.");
+                    throw new RemoteFileUnavailableException(WireTexts.OriginLeft.Text);
                 return await new RemoteFileSource(this, origin.Connection, request.ItemId, notify: false,
                         forDeviceId: connection.Remote.DeviceId, forName: connection.Remote.DisplayName)
                     .ReadAsync(request.FileIndex, request.Offset, request.Count);
             }
         }
 
-        throw new RemoteFileUnavailableException("Il PC d'origine ha già copiato altro: copia di nuovo i file.");
+        throw new RemoteFileUnavailableException(WireTexts.OriginCopiedElse.Text);
     }
 
     /// <summary>

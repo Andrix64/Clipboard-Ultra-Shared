@@ -52,6 +52,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Lingua scelta nel dialogo dell'installer ({language} = "italian" o "english"): CUS la usa finché
+; l'utente non ne sceglie un'altra nelle impostazioni (vedi src/Cus.Core/Localization/Loc.cs).
+[INI]
+Filename: "{app}\cus.ini"; Section: "Setup"; Key: "Language"; String: "{language}"
+
+[UninstallDelete]
+Type: files; Name: "{app}\cus.ini"
+
 [Icons]
 Name: "{autoprograms}\CUS"; Filename: "{app}\{#AppExeName}"
 Name: "{autodesktop}\CUS"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon

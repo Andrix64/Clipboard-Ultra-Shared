@@ -12,8 +12,8 @@ public sealed record MainWindowModel
 
     public required string Title { get; init; }
 
-    /// <summary>Righe informative (profilo, cartella dati, porta).</summary>
-    public IReadOnlyList<string> InfoLines { get; init; } = [];
+    /// <summary>Righe informative (profilo, cartella dati, porta), nella lingua corrente.</summary>
+    public Func<IReadOnlyList<string>> InfoLines { get; init; } = () => [];
 
     /// <summary>Null se l'avvio è fallito: la finestra mostra solo <see cref="StartupError"/>.</summary>
     public CusNode? Node { get; init; }

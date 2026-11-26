@@ -27,7 +27,7 @@ public sealed class AvaloniaNotifier(Func<Screens?> screens, string title, Actio
 
         var window = new Window
         {
-            Title = $"{title} — notifica",
+            Title = Loc.T("notifier.notification", title),
             SizeToContent = SizeToContent.WidthAndHeight,
             Topmost = true,
             ShowInTaskbar = false,

@@ -35,8 +35,26 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
 
     public event EventHandler? DirectionToggleRequested;
 
+    private bool _languageHooked;
+
     public void Show(SessionIndicatorState state) => Dispatcher.UIThread.Post(() =>
     {
+        if (!_languageHooked)
+        {
+            // Cambio di lingua: si ridisegna sul posto con i testi nuovi.
+            _languageHooked = true;
+            Loc.Changed += () => Dispatcher.UIThread.Post(() =>
+            {
+                if (_state is not { } current)
+                    return;
+                foreach (var window in _windows)
+                {
+                    window.Title = WindowTitle;
+                    window.Content = BuildContent(current);
+                }
+            });
+        }
+
         var hadWindows = _windows.Count > 0;
         _state = state;
         if (hadWindows)
@@ -100,9 +118,11 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         _windows.Clear();
     }
 
+    private static string WindowTitle => Loc.T("overlay.cusSharedClipboard");
+
     private Window CreateWindow(SessionIndicatorState state) => new()
     {
-        Title = "CUS — clipboard condivisa",
+        Title = WindowTitle,
         Content = BuildContent(state),
         SizeToContent = SizeToContent.WidthAndHeight,
         Topmost = true,
@@ -124,8 +144,8 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             var transfers = SmallButton(
                 state.ActiveTransfers > 0 ? $"{Icons.Transfers} {state.ActiveTransfers}" : Icons.Transfers,
                 state.ActiveTransfers > 0
-                    ? $"{state.ActiveTransfers} copie dei tuoi file in corso: chi le scarica, a che punto sono, annulla"
-                    : "Copie dei tuoi file appena concluse");
+                    ? Loc.T("overlay.copiesOfYourFilesInProgress", state.ActiveTransfers)
+                    : Loc.T("overlay.copiesOfYourFilesJustFinished"));
             transfers.Click += (_, _) => TransfersRequested?.Invoke(this, EventArgs.Empty);
             DockPanel.SetDock(transfers, Dock.Right);
             header.Children.Add(transfers);
@@ -134,8 +154,10 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         if (state.CanToggleDirection)
         {
             var readOnly = state.MyDirection == ShareDirection.ReadOnly;
-            var toggle = SmallButton(readOnly ? $"{Icons.ArrowDown} SOLA LETTURA" : $"{Icons.Bidirectional} BIDIREZ.",
-                readOnly ? "Sei in sola lettura: clic per tornare bidirezionale" : "Clic per passare in sola lettura: le tue copie resteranno qui");
+            var toggle = SmallButton(readOnly ? Loc.T("overlay.readOnly", Icons.ArrowDown) : Loc.T("overlay.twoWay", Icons.Bidirectional),
+                readOnly
+                    ? Loc.T("overlay.youAreReadOnlyClickTo")
+                    : Loc.T("overlay.clickToSwitchToReadOnly"));
             toggle.Click += (_, _) => DirectionToggleRequested?.Invoke(this, EventArgs.Empty);
             DockPanel.SetDock(toggle, Dock.Right);
             header.Children.Add(toggle);
@@ -149,7 +171,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             Foreground = Skin.LimeTextBrush,
             VerticalAlignment = VerticalAlignment.Center,
         };
-        Skin.SetRich(title, $"{Icons.Clipboard} CLIPBOARD CONDIVISA");
+        Skin.SetRich(title, Loc.T("overlay.sharedClipboard", Icons.Clipboard));
 
         // Spia rossa che pulsa, come sulla finestra principale: la condivisione è attiva.
         var lamp = new Lamp
@@ -189,7 +211,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
                 header,
                 Skin.Lcd(screen),
                 Participants(state.Participants),
-                Skin.Engraved("doppio clic per uscire dalla sessione"),
+                Skin.Engraved(Loc.T("overlay.doubleClickToLeaveTheSession")),
             },
         };
 
@@ -206,7 +228,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             },
         }, cornerRadius: 12);
         content.Cursor = new Cursor(StandardCursorType.Hand);
-        ToolTip.SetTip(content, "Doppio clic per uscire dalla sessione");
+        ToolTip.SetTip(content, Loc.T("overlay.doubleClickToLeaveTheSession2"));
         content.PointerPressed += (_, e) =>
         {
             // Solo un doppio clic sinistro deliberato: i clic accidentali sull'angolo in alto a destra
@@ -225,18 +247,18 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
     private static Control CurrentPanel(ClipboardSummary? current, IReadOnlyList<SessionParticipant> participants)
     {
         if (current is null)
-            return Skin.LcdText("nessuna copia ancora", 13);
+            return Skin.LcdText(Loc.T("overlay.nothingCopiedYet"), 13);
 
         var self = participants.FirstOrDefault(p => p.IsSelf);
         // Il nome di chi ha copiato è quello di oggi (se ha cambiato nome dopo la copia), non quello di allora.
         var originName = participants.FirstOrDefault(p => p.DeviceId == current.OriginDeviceId)?.DisplayName ?? current.OriginName;
-        var origin = DisplayText.Sanitize(originName, 64) + (self is not null && current.OriginDeviceId == self.DeviceId ? " (tu)" : "");
+        var origin = DisplayText.Sanitize(originName, 64) + (self is not null && current.OriginDeviceId == self.DeviceId ? Loc.T("overlay.you") : "");
         var size = current.SizeBytes is { } bytes ? DisplayText.FormatSize(bytes) : "—";
         var title = DisplayText.Sanitize(current.Title, 260, "");
         if (current.Kind == ClipboardContentKind.Files && !current.IsSensitive)
             title = DisplayText.MiddleEllipsis(title, TitleChars);
         if (!current.IsShared)
-            title += " · non condiviso";
+            title += Loc.T("overlay.notShared");
 
         var originText = Skin.LcdText(origin, 12, bold: true);
         originText.TextWrapping = TextWrapping.NoWrap;
@@ -287,7 +309,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
                 BorderThickness = new Thickness(1),
                 Child = label,
             };
-            ToolTip.SetTip(chip, participant.IsSelf ? $"{role} · sei tu" : role);
+            ToolTip.SetTip(chip, participant.IsSelf ? Loc.T("common.you", role) : role);
             panel.Children.Add(chip);
         }
 
@@ -297,8 +319,10 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
     /// <summary>Stella per l'host, frecce per bidirezionale e sola lettura (riceve soltanto).</summary>
     public static (string Glyph, string Role) Glyph(SessionParticipant participant) =>
         participant.IsHost ? (Icons.Star, "host")
-        : participant.Direction == ShareDirection.ReadOnly ? (Icons.ArrowDown, participant.Granted == ShareDirection.ReadOnly ? "sola lettura" : "sola lettura (scelta sua)")
-        : (Icons.Bidirectional, "bidirezionale");
+        : participant.Direction == ShareDirection.ReadOnly ? (Icons.ArrowDown, participant.Granted == ShareDirection.ReadOnly
+            ? Loc.T("common.readOnly")
+            : Loc.T("overlay.readOnlyTheirChoice"))
+        : (Icons.Bidirectional, Loc.T("common.twoWay"));
 
     private static Button SmallButton(string text, string tip)
     {
