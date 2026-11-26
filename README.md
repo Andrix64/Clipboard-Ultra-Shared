@@ -8,12 +8,14 @@ Share your clipboard in real time with other PCs on the same local network: with
 
 - **AirDrop-style sessions:** one PC offers itself as host, others ask to join, and the host accepts each one as two-way or read-only.
 - **Everything you copy:** text, images, files and folders (files are actually transferred, not just their paths).
-- **Always-visible indicator:** while the clipboard is shared, an always-on-top badge shows who is connected; one click leaves the session.
+- **Always-visible indicator:** while the clipboard is shared, an always-on-top badge shows who is connected and the last shared item; double-click it to leave the session.
 - **Friends:** trusted peers can join without confirmation, or connect at any time.
 - **Sensitive content:** copied passwords go only to friends marked as trusted and never enter the history.
 - **End-to-end encrypted:** signed identities, encrypted channel (libsodium), local database protected with DPAPI.
 
 ![Shared session](docs/screenshots/session.png)
+
+![Always-on-top indicator](docs/screenshots/indicator.png)
 
 ## Requirements
 
