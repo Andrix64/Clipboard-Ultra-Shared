@@ -40,6 +40,23 @@ public partial class LocTests
     }
 
     [Fact]
+    public void Get_FormatsNumbersInTheLanguageOfTheText_NotTheSystemCulture()
+    {
+        var system = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            Assert.Contains("1.234.567", Loc.Get("it", "content.imageBytes", 1234567));
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("it-IT");
+            Assert.Contains("1,234,567", Loc.Get("en", "content.imageBytes", 1234567));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = system;
+        }
+    }
+
+    [Fact]
     public void DefaultLanguage_PrefersTheInstallerChoice_OverWindows()
     {
         using var dir = new TempDirectory();

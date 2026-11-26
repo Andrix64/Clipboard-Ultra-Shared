@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
 
@@ -221,12 +220,11 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
         {
             Children =
             {
-                new ChassisDecor { Margin = new Thickness(-8), Screws = ScrewSide.Both, Seed = 5, CornerRadius = 10 },
                 body,
                 new LedStrip { HorizontalAlignment = HorizontalAlignment.Left, Width = 8, VerticalAlignment = VerticalAlignment.Stretch, Margin = new Thickness(0, 34, 0, 34) },
                 new LedStrip { HorizontalAlignment = HorizontalAlignment.Right, Width = 8, VerticalAlignment = VerticalAlignment.Stretch, Margin = new Thickness(0, 34, 0, 34) },
             },
-        }, cornerRadius: 12);
+        }, cornerRadius: 12, seed: 5);
         content.Cursor = new Cursor(StandardCursorType.Hand);
         ToolTip.SetTip(content, Loc.T("overlay.doubleClickToLeaveTheSessionTip"));
         content.PointerPressed += (_, e) =>

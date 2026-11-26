@@ -24,6 +24,51 @@ public class LocalFileListTests
     }
 
     [Fact]
+    public void LinksInsideACopiedFolder_AreNotFollowed()
+    {
+        using var temp = new TempDirectory();
+        var secrets = Path.Combine(temp.Path, "segreti");
+        Directory.CreateDirectory(secrets);
+        File.WriteAllText(Path.Combine(secrets, "id_rsa"), "chiave");
+        var root = Path.Combine(temp.Path, "progetto");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "a.txt"), "x");
+        var link = Path.Combine(root, "docs");
+        CreateDirectoryLink(link, secrets);
+        try
+        {
+            var files = LocalFileList.FromPaths([root]);
+
+            Assert.Equal(["progetto/a.txt"], files.Select(f => f.Name).ToList());
+        }
+        finally
+        {
+            // La cancellazione ricorsiva della cartella temporanea non sa togliere le giunzioni.
+            Directory.Delete(link);
+        }
+    }
+
+    /// <summary>Su Windows una giunzione: a differenza dei collegamenti simbolici non richiede privilegi.</summary>
+    private static void CreateDirectoryLink(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return;
+        }
+
+        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
+        {
+            ArgumentList = { "/c", "mklink", "/J", link, target },
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+        })!;
+        mklink.WaitForExit();
+        Assert.Equal(0, mklink.ExitCode);
+    }
+
+    [Fact]
     public void EmptyRootFolder_IsListed()
     {
         using var temp = new TempDirectory();

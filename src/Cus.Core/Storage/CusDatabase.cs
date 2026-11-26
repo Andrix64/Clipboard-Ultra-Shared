@@ -354,31 +354,53 @@ public sealed class CusDatabase : IDisposable
 
     private static List<HistoryEntry> ReadHistory(SqliteCommand command)
     {
+        using var reader = command.ExecuteReader();
+        var result = new List<HistoryEntry>();
+        while (reader.Read())
         {
-            using var reader = command.ExecuteReader();
-            var result = new List<HistoryEntry>();
-            while (reader.Read())
-            {
-                var kind = Enum.Parse<ClipboardContentKind>(reader.GetString(5));
-                var content = new ClipboardContent
-                {
-                    Kind = kind,
-                    Text = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    ImagePng = reader.IsDBNull(7) ? null : (byte[])reader[7],
-                    Files = reader.IsDBNull(8) ? null : JsonSerializer.Deserialize<List<ClipboardFileInfo>>(reader.GetString(8)),
-                };
-                result.Add(new HistoryEntry(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetInt64(2),
-                    reader.GetString(3),
-                    reader.GetString(4),
-                    content,
-                    DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture)));
-            }
-
-            return result;
+            // Una riga illeggibile (es. tipo sconosciuto scritto da una versione più recente) si salta:
+            // non deve rendere inutilizzabile tutta la cronologia.
+            if (TryReadHistoryRow(reader) is { } entry)
+                result.Add(entry);
         }
+
+        return result;
+    }
+
+    private static HistoryEntry? TryReadHistoryRow(SqliteDataReader reader)
+    {
+        if (!Enum.TryParse<ClipboardContentKind>(reader.GetString(5), out var kind)
+            || !DateTimeOffset.TryParse(reader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.None, out var at))
+            return null;
+
+        List<ClipboardFileInfo>? files = null;
+        if (!reader.IsDBNull(8))
+        {
+            try
+            {
+                files = JsonSerializer.Deserialize<List<ClipboardFileInfo>>(reader.GetString(8));
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        var content = new ClipboardContent
+        {
+            Kind = kind,
+            Text = reader.IsDBNull(6) ? null : reader.GetString(6),
+            ImagePng = reader.IsDBNull(7) ? null : (byte[])reader[7],
+            Files = files,
+        };
+        return new HistoryEntry(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetInt64(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            content,
+            at);
     }
 
     public void Dispose()

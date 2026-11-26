@@ -28,7 +28,7 @@ public static class ClipboardFileNames
 
     /// <summary>
     /// Estensioni che avviano codice all'apertura (programmi, script, collegamenti, installer, macro,
-    /// immagini disco). Si avvisa chi le riceve: il nome lo sceglie chi le manda.
+    /// immagini disco), su Windows e su Linux. Si avvisa chi le riceve: il nome lo sceglie chi le manda.
     /// </summary>
     private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -36,6 +36,14 @@ public static class ClipboardFileNames
         ".wsf", ".wsh", ".hta", ".msi", ".msp", ".mst", ".msix", ".msixbundle", ".appx", ".appxbundle", ".appref-ms",
         ".application", ".lnk", ".url", ".scf", ".cpl", ".dll", ".sys", ".inf", ".reg", ".jar", ".iso", ".img",
         ".vhd", ".vhdx", ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppam", ".chm", ".settingcontent-ms",
+        ".library-ms", ".searchconnector-ms", ".theme", ".themepack", ".diagcab", ".msc", ".gadget", ".py", ".pyw",
+        ".sh", ".bash", ".zsh", ".run", ".appimage", ".desktop", ".deb", ".rpm", ".flatpakref", ".snap",
+    };
+
+    /// <summary>File che cambiano il comportamento della cartella o della shell in cui finiscono.</summary>
+    private static readonly HashSet<string> ShellConfigNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "desktop.ini", "autorun.inf", ".bashrc", ".bash_profile", ".profile", ".zshrc", ".directory",
     };
 
     /// <summary>Lunghezza massima del percorso relativo: cFileName di FILEDESCRIPTORW è MAX_PATH (260) con il terminatore.</summary>
@@ -133,7 +141,7 @@ public static class ClipboardFileNames
             ? []
             : files.Where(f => !f.IsDirectory)
                 .Select(f => f.Name[(f.Name.LastIndexOf('/') + 1)..])
-                .Where(n => ExecutableExtensions.Contains(Path.GetExtension(n)))
+                .Where(n => ExecutableExtensions.Contains(Path.GetExtension(n)) || ShellConfigNames.Contains(n))
                 .ToList();
 
     /// <summary>Un nome relativo con '/' come separatore, senza componenti pericolose.</summary>

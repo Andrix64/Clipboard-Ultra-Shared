@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using Cus.Core.Abstractions;
 using Cus.Core.Friends;
 using Cus.Core.Identity;
+using Cus.Core.Imaging;
 using Cus.Core.Net;
 using Cus.Core.Node;
 
@@ -55,11 +56,22 @@ public sealed class HardeningTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ImagesThatAreNotValidPng_AreNotWrittenToTheOthersClipboard()
+    {
+        var (host, member) = await StartSessionAsync();
+        host.Clipboard.Copy(ClipboardContent.FromImage(RandomBytes(1024)));
+        host.Copy("dopo l'immagine");
+
+        await Eventually.TrueAsync(() => member.Text == "dopo l'immagine", "la copia successiva arriva");
+        Assert.DoesNotContain(member.ClipboardEvents, e => e.Content.Kind == ClipboardContentKind.Image);
+    }
+
+    [Fact]
     public async Task HistoryWithLargeImages_DoesNotDropTheMember_AndFullEntriesAreFetchedOnUse()
     {
         var (host, member) = await StartSessionAsync();
-        var first = RandomBytes(4 * 1024 * 1024);
-        var second = RandomBytes(4 * 1024 * 1024);
+        var first = LargePng(4 * 1024 * 1024);
+        var second = LargePng(4 * 1024 * 1024);
         host.Clipboard.Copy(ClipboardContent.FromImage(first));
         await Eventually.TrueAsync(() => member.Clipboard.Current?.ImagePng?.SequenceEqual(first) == true, "prima immagine");
         host.Clipboard.Copy(ClipboardContent.FromImage(second));
@@ -437,6 +449,15 @@ public sealed class HardeningTests : IAsyncLifetime
         var node = await TestNode.StartAsync(_root.Path, name);
         _nodes.Add(node);
         return node;
+    }
+
+    /// <summary>Intestazione PNG valida (si controllano firma e dimensioni) seguita da byte casuali.</summary>
+    private static byte[] LargePng(int length)
+    {
+        var bytes = RandomBytes(length);
+        var header = PngCodec.Encode(new RgbaImage(1024, 1024, new byte[1024 * 1024 * 4]));
+        header.AsSpan(0, 8 + 8 + 13).CopyTo(bytes);
+        return bytes;
     }
 
     private static byte[] RandomBytes(int length)

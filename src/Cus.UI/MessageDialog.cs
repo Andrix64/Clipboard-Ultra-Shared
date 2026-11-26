@@ -1,9 +1,6 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Platform;
 
 namespace Cus.UI;
 
@@ -15,25 +12,6 @@ public static class MessageDialog
 {
     public static async Task ShowAsync(Window owner, string title, string message)
     {
-        var window = new Window
-        {
-            Title = $"CUS — {title}",
-            Icon = Skin.AppIcon,
-            Width = 480,
-            SizeToContent = SizeToContent.Height,
-            CanResize = false,
-            ShowInTaskbar = false,
-            WindowDecorations = WindowDecorations.None,
-            Background = Brushes.Transparent,
-            TransparencyLevelHint = [WindowTransparencyLevel.Transparent],
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-        };
-
-        var close = Skin.Pill(Loc.T("common.close"));
-        close.IsDefault = true;
-        close.IsCancel = true;
-        close.Click += (_, _) => window.Close();
-
         var text = new SelectableTextBlock
         {
             Text = message,
@@ -42,53 +20,7 @@ public static class MessageDialog
             Foreground = Skin.InkBrush,
             TextWrapping = TextWrapping.Wrap,
         };
-        var lcd = Skin.Lcd(new StackPanel
-        {
-            Spacing = 6,
-            Children =
-            {
-                Skin.LcdText(title.ToUpperInvariant(), 11, bold: true),
-                new ScrollViewer { MaxHeight = 320, Content = text },
-            },
-        });
-        lcd.Padding = new Thickness(14, 10);
-
-        var header = new DockPanel
-        {
-            Background = Brushes.Transparent,
-            Children =
-            {
-                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Padding = new Thickness(0, 0, 5, 0), Foreground = Skin.LimeTextBrush },
-            },
-        };
-        header.PointerPressed += (_, e) => window.BeginMoveDrag(e);
-
-        window.Content = new Panel
-        {
-            Margin = new Thickness(12),
-            Children =
-            {
-                Skin.Chassis(new StackPanel
-                {
-                    Margin = new Thickness(8, 4, 8, 8),
-                    Spacing = 14,
-                    Children =
-                    {
-                        header,
-                        lcd,
-                        new StackPanel
-                        {
-                            Orientation = Orientation.Horizontal,
-                            HorizontalAlignment = HorizontalAlignment.Right,
-                            Children = { close },
-                        },
-                    },
-                }, cornerRadius: 18),
-            },
-        };
-        window.Opened += (_, _) => close.Focus();
-
-        await window.ShowDialog(owner);
+        await DialogShell.AskAsync(owner, title, 480, new ScrollViewer { MaxHeight = 320, Content = text }, [Loc.T("common.close")], seed: 7);
     }
 
     /// <summary>

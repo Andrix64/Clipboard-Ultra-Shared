@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Implementazioni Linux delle interfacce di Cus.Core: clipboard X11 (Xlib + XFixes, anche sotto
+       Wayland tramite XWayland, come la UI Avalonia), segreti nel Secret Service (libsecret), ritocchi
+       alle finestre dell'indicatore. Unico posto, insieme a Cus.App.Linux, dove sono ammesse API di Linux.
+       Nessun pacchetto NuGet: solo librerie di sistema caricate a runtime (libX11, libXfixes, libsecret). -->
+  <PropertyGroup>
+    <RootNamespace>Cus.Platform.Linux</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cus.Platform.Linux.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
+</Project>

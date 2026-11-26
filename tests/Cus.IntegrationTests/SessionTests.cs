@@ -46,6 +46,42 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AcceptingAfterMoreThanTheIdleTimeout_KeepsTheMemberConnected()
+    {
+        var patient = TestNode.DefaultOptions() with { ConsentTimeout = TimeSpan.FromSeconds(60) };
+        var (andrea, luca) = (await Start("andrea", patient), await Start("luca", patient));
+        await andrea.ShowAsync();
+        // L'host risponde dopo IdleTimeout: il silenzio durante l'attesa del consenso non è inattività.
+        andrea.Consent.Delay = Core.Net.PeerConnection.IdleTimeout + TimeSpan.FromSeconds(2);
+
+        var result = await luca.JoinAsync(andrea);
+        Assert.Equal(JoinOutcome.Accepted, result.Outcome);
+        await Task.Delay(Core.Net.PeerConnection.PingInterval * 2 + TimeSpan.FromSeconds(1));
+
+        Assert.Equal(2, andrea.Node.Session?.Participants.Count);
+        luca.Copy("ancora collegato");
+        await Eventually.TrueAsync(() => andrea.Text == "ancora collegato", "la sessione funziona ancora");
+    }
+
+    [Fact]
+    public async Task GuestWhoLeavesWhileWaiting_DisappearsFromTheHostsRequests()
+    {
+        var patient = TestNode.DefaultOptions() with { ConsentTimeout = TimeSpan.FromSeconds(60) };
+        var (andrea, luca) = (await Start("andrea", patient), await Start("luca", patient));
+        await andrea.ShowAsync();
+        andrea.Consent.Delay = TimeSpan.FromSeconds(60);
+        var join = luca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.JoinRequests.Count == 1, "andrea vede la richiesta");
+
+        await luca.StopAsync();
+
+        // Ben prima della scadenza del consenso.
+        await Eventually.TrueAsync(() => andrea.Node.JoinRequests.Count == 0, "la richiesta sparisce");
+        await Assert.ThrowsAnyAsync<Exception>(() => join);
+        Assert.Null(andrea.Node.Session?.Participants.FirstOrDefault(p => p.DisplayName == "luca"));
+    }
+
+    [Fact]
     public async Task Rename_IsSeenByTheOthersInTheSession_AndByTheHost()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));
@@ -78,14 +114,18 @@ public sealed class SessionTests : IAsyncLifetime
 
         // Il nome dell'host (anche con altre maiuscole) non è accettato: all'host resta il nome vecchio.
         await luca.Node.SetDisplayNameAsync(hostName.ToUpperInvariant() + " ");
-        // Subito dopo, un secondo cambio è oltre il limite e viene scartato.
+        // Subito dopo, un secondo cambio è oltre il limite: non passa subito, ma allo scadere dell'intervallo.
         await luca.Node.SetDisplayNameAsync("Troppo Presto");
-
-        // Passato l'intervallo un nome onesto passa; i due precedenti non sono mai arrivati nell'elenco.
-        await Task.Delay(TimeSpan.FromSeconds(2.5));
-        await luca.Node.SetDisplayNameAsync("Luca Onesto");
-        await Eventually.TrueAsync(() => andrea.Node.Session!.Participants.Any(p => !p.IsHost && p.DisplayName == "Luca Onesto"), "l'host vede il nome onesto");
+        await Task.Delay(TimeSpan.FromSeconds(0.5));
         Assert.DoesNotContain(andrea.Node.Session!.Participants, p => !p.IsHost && p.DisplayName == "Troppo Presto");
+        await Eventually.TrueAsync(() => andrea.Node.Session!.Participants.Any(p => !p.IsHost && p.DisplayName == "Troppo Presto"), "il nome arriva a intervallo scaduto");
+
+        // Più cambi ravvicinati: vale l'ultimo.
+        await luca.Node.SetDisplayNameAsync("Luca Uno");
+        await luca.Node.SetDisplayNameAsync("Luca Onesto");
+        await Eventually.TrueAsync(() => andrea.Node.Session!.Participants.Any(p => !p.IsHost && p.DisplayName == "Luca Onesto"), "l'host vede l'ultimo nome");
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        Assert.Contains(andrea.Node.Session!.Participants, p => !p.IsHost && p.DisplayName == "Luca Onesto");
         Assert.Single(andrea.Node.Session!.Participants, p => DisplayText.LooksAlike(p.DisplayName, hostName));
     }
 
@@ -303,9 +343,9 @@ public sealed class SessionTests : IAsyncLifetime
         Assert.Equal(30, andrea.Node.CurrentClipboard.SizeBytes);
     }
 
-    private async Task<TestNode> Start(string name)
+    private async Task<TestNode> Start(string name, CusNodeOptions? options = null)
     {
-        var node = await TestNode.StartAsync(_root.Path, name);
+        var node = await TestNode.StartAsync(_root.Path, name, options);
         _nodes.Add(node);
         return node;
     }

@@ -95,6 +95,18 @@ public class ClipboardFileNamesTests
         Assert.Empty(ClipboardFileNames.ExecutableNames([new ClipboardFileInfo("relazione.docx", 1)]));
         Assert.Empty(ClipboardFileNames.ExecutableNames(null));
     }
+
+    [Fact]
+    public void ExecutableNames_IncludesLinuxLaunchersAndShellConfigFiles()
+    {
+        var files = new[]
+        {
+            new ClipboardFileInfo("app/Avvia.desktop", 1), new ClipboardFileInfo("install.sh", 1), new ClipboardFileInfo("tool.AppImage", 1),
+            new ClipboardFileInfo("cartella/desktop.ini", 1), new ClipboardFileInfo("home/.bashrc", 1), new ClipboardFileInfo("dati.bin", 1),
+        };
+
+        Assert.Equal(["Avvia.desktop", "install.sh", "tool.AppImage", "desktop.ini", ".bashrc"], ClipboardFileNames.ExecutableNames(files));
+    }
 }
 
 public class DisplayTextTests

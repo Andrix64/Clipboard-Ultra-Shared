@@ -133,8 +133,12 @@ public static class Skin
 
     public static IBrush AlertBrush { get; } = new SolidColorBrush(Alert);
 
-    /// <summary>Telaio con bordo scuro e riflesso in alto, per le finestre costruite in codice.</summary>
-    public static Border Chassis(Control child, double cornerRadius = 14) => new()
+    /// <summary>
+    /// Telaio con bordo scuro e riflesso in alto, per le finestre costruite in codice: stessa usura
+    /// (graffi, spazzolatura, viti) dei corpi della finestra principale. <paramref name="seed"/> cambia
+    /// la disposizione dei graffi, così le finestre non sembrano copie.
+    /// </summary>
+    public static Border Chassis(Control child, double cornerRadius = 14, int seed = 4, ScrewSide screws = ScrewSide.Both) => new()
     {
         Background = ChassisBrush,
         BorderBrush = ChassisEdgeBrush,
@@ -142,7 +146,15 @@ public static class Skin
         CornerRadius = new CornerRadius(cornerRadius),
         Padding = new Thickness(8),
         BoxShadow = BoxShadows.Parse("0 4 14 0 #99000000"),
-        Child = child,
+        Child = new Panel
+        {
+            Children =
+            {
+                // Margine negativo pari al Padding: l'usura copre tutta la scocca, non solo l'area del contenuto.
+                new ChassisDecor { Margin = new Thickness(-8), Screws = screws, Seed = seed, CornerRadius = Math.Max(0, cornerRadius - 2) },
+                child,
+            },
+        },
     };
 
     /// <summary>Display LCD lime con testo scuro.</summary>

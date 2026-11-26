@@ -11,7 +11,7 @@ Share your clipboard in real time with other PCs on the same local network: with
 - **Always-visible indicator:** while the clipboard is shared, an always-on-top badge shows who is connected and the last shared item; double-click it to leave the session.
 - **Friends:** trusted peers can join without confirmation, or connect at any time.
 - **Sensitive content:** copied passwords go only to friends marked as trusted and never enter the history.
-- **End-to-end encrypted:** signed identities, encrypted channel (libsodium), local database protected with DPAPI.
+- **End-to-end encrypted:** signed identities, encrypted channel (libsodium), local database whose key is protected by DPAPI on Windows and by the Secret Service keyring on Linux.
 
 ![Shared session](docs/screenshots/session.png)
 
@@ -19,15 +19,26 @@ Share your clipboard in real time with other PCs on the same local network: with
 
 ## Requirements
 
-- Windows 10 1809 or later
+- Windows 10 1809 or later, or Linux (x64/arm64) with an X11 session or a Wayland session with XWayland (GNOME, KDE Plasma and most desktops)
+- On Linux: `libX11`, `libXfixes`, `libsecret` and a Secret Service keyring (GNOME Keyring, KWallet or KeePassXC). On Debian/Ubuntu: `sudo apt install libx11-6 libxfixes3 libsecret-1-0 gnome-keyring`
 - [.NET SDK](https://dotnet.microsoft.com/download) as pinned in `global.json` (to build)
 
 ## Build and run
+
+Windows:
 
 ```powershell
 dotnet build Cus.slnx
 dotnet run --project src/Cus.App.Windows
 ```
+
+Linux (the solution also contains the Windows-only projects, so build the Linux app directly):
+
+```bash
+dotnet run --project src/Cus.App.Linux
+```
+
+On Linux, received files are downloaded when you paste them (as on Windows) into a private cache folder, `~/.local/share/CUS/received-files`, and the file manager copies them from there; the folder is emptied when CUS starts and exits. Pasting a large file into a Qt app (Dolphin) may time out the first time: the download continues and the next paste is immediate. The tray icon needs a desktop with StatusNotifier support (KDE, or GNOME with the AppIndicator extension).
 
 Useful options: `--profile <name>`, `--name <display name>`, `--port <port>` (default 23700), `--peer <host:port>`, `--bind <address>`, `--clipboard real|simulated`, `--no-discovery`.
 
@@ -49,4 +60,10 @@ Builds a self-contained `win-x64` package and an [Inno Setup](https://jrsoftware
 
 ```powershell
 ./scripts/publish.ps1 -Version 0.1.0
+```
+
+For Linux, a self-contained folder (no .NET runtime needed on the target machine) with the `cus` executable:
+
+```bash
+dotnet publish src/Cus.App.Linux -c Release -r linux-x64 --self-contained -p:DebugType=none -o artifacts/publish/linux-x64
 ```

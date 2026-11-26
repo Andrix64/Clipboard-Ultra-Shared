@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Eseguibile Linux: fornisce le parti Linux (LinuxPlatform) all'avvio comune di Cus.App.Shared,
+       come Cus.App.Windows. Richiede una sessione X11 o XWayland. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Cus.App.Linux</RootNamespace>
+    <AssemblyName>cus</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+    <ProjectReference Include="..\Cus.UI\Cus.UI.csproj" />
+    <ProjectReference Include="..\Cus.App.Shared\Cus.App.Shared.csproj" />
+    <ProjectReference Include="..\Cus.Platform.Linux\Cus.Platform.Linux.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
+</Project>

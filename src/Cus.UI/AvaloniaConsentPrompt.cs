@@ -1,8 +1,5 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
-using Avalonia.Media;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
 using Cus.Core.Friends;
@@ -113,19 +110,8 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
         string title, string kicker, string headline, string body, string user, string fingerprint,
         IReadOnlyList<(string Glyph, string Label, T Value)> choices, TaskCompletionSource<T> tcs)
     {
-        var window = new Window
-        {
-            Title = title,
-            Icon = Skin.AppIcon,
-            Width = 480,
-            SizeToContent = SizeToContent.Height,
-            CanResize = false,
-            Topmost = true,
-            WindowDecorations = WindowDecorations.None,
-            Background = Brushes.Transparent,
-            TransparencyLevelHint = [WindowTransparencyLevel.Transparent],
-            WindowStartupLocation = WindowStartupLocation.CenterScreen,
-        };
+        var window = new Window { Topmost = true };
+        DialogShell.Configure(window, title, 480, WindowStartupLocation.CenterScreen);
 
         var buttons = new List<Button>();
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Spacing = 34 };
@@ -163,32 +149,7 @@ public sealed class AvaloniaConsentPrompt : IConsentPrompt
             lines.Children.Add(Skin.LcdText(Loc.T("consent.user", user), 11));
         lines.Children.Add(Skin.LcdText(Loc.T("consent.fingerprintCompareItWithTheOne"), 11));
         lines.Children.Add(Skin.LcdText(fingerprint, 15, bold: true));
-        var lcd = Skin.Lcd(lines);
-        lcd.Padding = new Thickness(14, 10);
-
-        var header = new DockPanel
-        {
-            Background = Brushes.Transparent,
-            Children =
-            {
-                new TextBlock { Text = "CUS", FontSize = 20, FontWeight = FontWeight.Black, FontStyle = FontStyle.Italic, Padding = new Thickness(0, 0, 5, 0), Foreground = Skin.LimeTextBrush },
-            },
-        };
-        header.PointerPressed += (_, e) => window.BeginMoveDrag(e);
-
-        window.Content = new Panel
-        {
-            Margin = new Thickness(12),
-            Children =
-            {
-                Skin.Chassis(new StackPanel
-                {
-                    Margin = new Thickness(8, 4, 8, 8),
-                    Spacing = 14,
-                    Children = { header, lcd, row },
-                }, cornerRadius: 18),
-            },
-        };
+        window.Content = DialogShell.Frame([DialogShell.LogoHeader(window), DialogShell.TextLcd(lines), row], seed: 9);
 
         // Le scelte si attivano solo dopo che la finestra è comparsa da un po'.
         window.Opened += (_, _) => DispatcherTimer.RunOnce(() =>

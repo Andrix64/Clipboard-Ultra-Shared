@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Avvio comune agli eseguibili (Cus.App.Windows, Cus.App.Linux): opzioni, profilo, database,
+       identità, nodo e chiusura. Ogni eseguibile fornisce solo le sue parti di piattaforma (PlatformHost).
+       Sta qui e non in Cus.UI perché sceglie le implementazioni (anche la clipboard simulata), che la UI
+       non deve conoscere. -->
+  <PropertyGroup>
+    <RootNamespace>Cus.App.Shared</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cus.Core\Cus.Core.csproj" />
+    <ProjectReference Include="..\Cus.UI\Cus.UI.csproj" />
+    <ProjectReference Include="..\Cus.Platform.Simulated\Cus.Platform.Simulated.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Loc.T("italiano", "english") ovunque senza using. -->
+    <Using Include="Cus.Core.Localization" />
+  </ItemGroup>
+
+</Project>

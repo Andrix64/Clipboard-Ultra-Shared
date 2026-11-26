@@ -178,7 +178,7 @@ public sealed partial class CusNode
             bool finished;
             lock (_offerGate)
             {
-                record.RecordRead(fileIndex, offset + data.Length);
+                record.RecordRead(fileIndex, offset, offset + data.Length);
                 record.LastActivity = DateTimeOffset.UtcNow;
                 finished = record.State == TransferState.Active && record.BytesDone >= record.TotalBytes;
                 if (finished)
@@ -382,19 +382,20 @@ public sealed partial class CusNode
 
         public long TotalBytes { get; } = totalBytes;
 
-        /// <summary>Per ogni file, fin dove è arrivato chi incolla: un pezzo letto due volte non conta doppio.</summary>
-        private readonly Dictionary<int, long> _readUpTo = [];
+        /// <summary>
+        /// Per ogni file, le parti già lette: un pezzo letto due volte non conta doppio, e leggere solo la
+        /// fine di un file (un'anteprima, letture in parallelo) non conta come averlo letto tutto.
+        /// </summary>
+        private readonly Dictionary<int, CoveredRanges> _read = [];
 
         public long BytesDone { get; private set; }
 
-        /// <summary>Sotto _offerGate.</summary>
-        public void RecordRead(int fileIndex, long end)
+        /// <summary>Registra la lettura di [start, end) del file. Sotto _offerGate.</summary>
+        public void RecordRead(int fileIndex, long start, long end)
         {
-            _readUpTo.TryGetValue(fileIndex, out var previous);
-            if (previous >= end)
-                return;
-            _readUpTo[fileIndex] = end;
-            BytesDone = Math.Min(TotalBytes, BytesDone + (end - previous));
+            if (!_read.TryGetValue(fileIndex, out var ranges))
+                _read[fileIndex] = ranges = new CoveredRanges();
+            BytesDone = Math.Min(TotalBytes, BytesDone + ranges.Add(start, end));
         }
 
         public TransferState State { get; set; } = TransferState.Active;
@@ -402,5 +403,38 @@ public sealed partial class CusNode
         public DateTimeOffset LastActivity { get; set; } = DateTimeOffset.UtcNow;
 
         public TransferView ToView() => new(ItemId, RequesterId, RequesterName, ItemName, TotalBytes, BytesDone, State, LastActivity);
+    }
+
+    /// <summary>Intervalli di byte già letti di un file, disgiunti e in ordine.</summary>
+    internal sealed class CoveredRanges
+    {
+        private readonly List<(long Start, long End)> _ranges = [];
+
+        /// <summary>Aggiunge [start, end) e restituisce quanti di quei byte non erano già coperti.</summary>
+        public long Add(long start, long end)
+        {
+            if (end <= start)
+                return 0;
+
+            var added = end - start;
+            var (mergedStart, mergedEnd) = (start, end);
+            var i = 0;
+            while (i < _ranges.Count && _ranges[i].End < start)
+                i++;
+            var first = i;
+            // Gli intervalli che si sovrappongono o si toccano si fondono in uno solo.
+            while (i < _ranges.Count && _ranges[i].Start <= end)
+            {
+                var (s, e) = _ranges[i];
+                added -= Math.Max(0, Math.Min(e, end) - Math.Max(s, start));
+                mergedStart = Math.Min(mergedStart, s);
+                mergedEnd = Math.Max(mergedEnd, e);
+                i++;
+            }
+
+            _ranges.RemoveRange(first, i - first);
+            _ranges.Insert(first, (mergedStart, mergedEnd));
+            return added;
+        }
     }
 }

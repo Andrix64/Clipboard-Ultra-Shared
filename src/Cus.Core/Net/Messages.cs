@@ -53,7 +53,8 @@ public abstract record CusMessage
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            throw new ProtocolException(Loc.T("net.invalidMessage", ex.Message));
+            // Il messaggio dell'eccezione può riportare parti del JSON ricevuto: si ripulisce prima di mostrarlo.
+            throw new ProtocolException(Loc.T("net.invalidMessage", DisplayText.Sanitize(ex.Message, 200)));
         }
     }
 }

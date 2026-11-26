@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
 using Cus.Core.Node;
@@ -24,16 +23,8 @@ public sealed class TransfersWindow : Window
     private TransfersWindow(CusNode node)
     {
         _node = node;
-        Title = Loc.T("transfersWindow.cusTransfers");
-        Icon = Skin.AppIcon;
-        Width = 460;
-        SizeToContent = SizeToContent.Height;
-        CanResize = false;
         Topmost = true;
-        WindowDecorations = WindowDecorations.None;
-        Background = Brushes.Transparent;
-        TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        DialogShell.Configure(this, Loc.T("transfersWindow.cusTransfers"), 460, WindowStartupLocation.CenterScreen);
 
         var close = Skin.Pill(Loc.T("common.close"));
         close.IsCancel = true;
@@ -53,25 +44,11 @@ public sealed class TransfersWindow : Window
                 heading,
             },
         };
-        header.PointerPressed += (_, e) => BeginMoveDrag(e);
+        DialogShell.DragsWindow(header, this);
 
-        Content = new Panel
-        {
-            Margin = new Thickness(12),
-            Children =
-            {
-                Skin.Chassis(new StackPanel
-                {
-                    Margin = new Thickness(6),
-                    Spacing = 10,
-                    Children =
-                    {
-                        header,
-                        Skin.Lcd(new ScrollViewer { MaxHeight = 360, Content = _rows }, dark: true),
-                    },
-                }, cornerRadius: 14),
-            },
-        };
+        Content = DialogShell.Frame(
+            [header, Skin.Lcd(new ScrollViewer { MaxHeight = 360, Content = _rows }, dark: true)],
+            seed: 8, cornerRadius: 14, padding: new Thickness(6), spacing: 10);
 
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Refresh());
         Opened += (_, _) =>

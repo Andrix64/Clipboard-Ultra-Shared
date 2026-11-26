@@ -2,7 +2,7 @@ using Cus.Core.Abstractions;
 using Cus.Platform.Simulated;
 using Cus.UI;
 
-namespace Cus.App.Windows;
+namespace Cus.App.Shared;
 
 /// <summary>Collega la scheda "Clipboard simulata" della UI alla clipboard virtuale dell'istanza.</summary>
 internal sealed class SimulationControls : ISimulationControls

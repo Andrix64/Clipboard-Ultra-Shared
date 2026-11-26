@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using Cus.Core.Abstractions;
 
@@ -38,6 +37,8 @@ public sealed class AvaloniaNotifier(Func<Screens?> screens, string title, Actio
             TransparencyLevelHint = [WindowTransparencyLevel.Transparent],
             Content = Skin.Chassis(new StackPanel
             {
+                // Spazio per le viti negli angoli, che il display altrimenti coprirebbe.
+                Margin = new Thickness(6),
                 Spacing = 4,
                 Children =
                 {
@@ -52,7 +53,7 @@ public sealed class AvaloniaNotifier(Func<Screens?> screens, string title, Actio
                         Foreground = isError ? Skin.AlertBrush : Skin.LimeTextBrush,
                     }, dark: true),
                 },
-            }, cornerRadius: 10),
+            }, cornerRadius: 10, seed: 10),
         };
         // Più notifiche ravvicinate si impilano verso l'alto invece di coprirsi a vicenda.
         _open.Add(window);

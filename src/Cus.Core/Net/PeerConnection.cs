@@ -29,24 +29,35 @@ public sealed class PeerConnection : IAsyncDisposable
     /// <summary>Messaggi ricevuti in attesa dell'handler: oltre, la lettura si ferma finché l'handler non recupera.</summary>
     private const int HandlerQueueCapacity = 256;
 
+    /// <summary>
+    /// Byte ricevuti in attesa dell'handler. Il solo numero non basta: 256 messaggi da 8 MB sarebbero
+    /// 2 GB in memoria per un peer che manda messaggi grandi mentre l'handler è fermo.
+    /// </summary>
+    private const long HandlerQueueMaxBytes = 64L * 1024 * 1024;
+
     private readonly SecureChannel _channel;
+    private readonly Socket _socket;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<CusMessage>> _pending = new();
     private long _nextRequestId;
     private long _lastReceivedTicks = Environment.TickCount64;
     private readonly Lock _closeGate = new();
-    private readonly Channel<CusMessage> _handlerQueue = Channel.CreateBounded<CusMessage>(
+    private readonly Channel<(CusMessage Message, int Bytes)> _handlerQueue = Channel.CreateBounded<(CusMessage, int)>(
         new BoundedChannelOptions(HandlerQueueCapacity) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
+    private readonly SemaphoreSlim _handlerDequeued = new(0);
+    private long _handlerQueuedBytes;
     private Action<PeerConnection, string>? _closedHandlers;
     private string? _closeReason;
     private int _closed;
+    private int _started;
     private Task? _receiveLoop;
     private Task? _handlerLoop;
     private Task? _pingLoop;
 
-    private PeerConnection(SecureChannel channel, DeviceInfo remote, EndPoint? remoteEndPoint, bool isInitiator)
+    private PeerConnection(SecureChannel channel, Socket socket, DeviceInfo remote, EndPoint? remoteEndPoint, bool isInitiator)
     {
         _channel = channel;
+        _socket = socket;
         Remote = remote;
         RemoteEndPoint = remoteEndPoint;
         IsInitiator = isInitiator;
@@ -130,13 +141,40 @@ public sealed class PeerConnection : IAsyncDisposable
         return await HandshakeAsync(client, identity, listenPort, isInitiator: false, revealTo, timeout.Token);
     }
 
-    /// <summary>Avvia la ricezione continua e i ping. Prima di questo si usa <see cref="ReceiveAsync"/>.</summary>
+    /// <summary>
+    /// Avvia la ricezione continua e i ping. Prima di questo si usa <see cref="ReceiveAsync"/>.
+    /// Chiamate successive alla prima non fanno nulla.
+    /// </summary>
     public void Start()
     {
+        if (Interlocked.Exchange(ref _started, 1) != 0)
+            return;
+        // Il silenzio prima dell'avvio (es. l'attesa del consenso dell'host) non conta come inattività:
+        // senza questo il primo controllo del ping chiuderebbe chi è stato accettato dopo IdleTimeout.
+        Interlocked.Exchange(ref _lastReceivedTicks, Environment.TickCount64);
         IsStarted = true;
         _handlerLoop = Task.Run(HandlerLoopAsync);
         _receiveLoop = Task.Run(ReceiveLoopAsync);
         _pingLoop = Task.Run(PingLoopAsync);
+    }
+
+    /// <summary>
+    /// Prima di <see cref="Start"/>, quando dall'altra parte non deve arrivare nulla (per esempio chi
+    /// aspetta la risposta a una richiesta di ingresso): true se ha chiuso, si è interrotta o ha mandato
+    /// qualcosa, cioè un congedo. Non legge dal socket, quindi non tocca il flusso cifrato.
+    /// </summary>
+    public bool HasInputOrHangup()
+    {
+        if (IsClosed)
+            return true;
+        try
+        {
+            return _socket.Poll(0, SelectMode.SelectRead);
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            return true;
+        }
     }
 
     /// <summary>Riceve un singolo messaggio, prima di <see cref="Start"/> (fasi iniziali del protocollo).</summary>
@@ -288,7 +326,7 @@ public sealed class PeerConnection : IAsyncDisposable
                 DisplayText.Sanitize(hello.DisplayName, 64),
                 DisplayText.Sanitize(hello.UserName, 64, ""),
                 channel.RemoteIdentityKey);
-            return new PeerConnection(channel, remote, endPoint, isInitiator) { RemoteListenPort = hello.ListenPort };
+            return new PeerConnection(channel, client.Client, remote, endPoint, isInitiator) { RemoteListenPort = hello.ListenPort };
         }
         catch
         {
@@ -304,7 +342,8 @@ public sealed class PeerConnection : IAsyncDisposable
         {
             while (!_lifetime.IsCancellationRequested)
             {
-                var message = CusMessage.Deserialize(await _channel.ReceiveAsync(_lifetime.Token));
+                var payload = await _channel.ReceiveAsync(_lifetime.Token);
+                var message = CusMessage.Deserialize(payload);
                 Interlocked.Exchange(ref _lastReceivedTicks, Environment.TickCount64);
 
                 switch (message)
@@ -322,7 +361,12 @@ public sealed class PeerConnection : IAsyncDisposable
                 // Gli handler girano in un ciclo a parte: un handler lento (per esempio una scrittura
                 // nella clipboard in attesa) non deve fermare risposte e ping, altrimenti una richiesta
                 // fatta mentre l'handler aspetta riceverebbe la risposta solo dopo il timeout.
-                await _handlerQueue.Writer.WriteAsync(message, _lifetime.Token);
+                // Oltre il limite in byte si aspetta che l'handler smaltisca (un messaggio da solo passa sempre).
+                while (Interlocked.Read(ref _handlerQueuedBytes) > 0
+                       && Interlocked.Read(ref _handlerQueuedBytes) + payload.Length > HandlerQueueMaxBytes)
+                    await _handlerDequeued.WaitAsync(_lifetime.Token);
+                Interlocked.Add(ref _handlerQueuedBytes, payload.Length);
+                await _handlerQueue.Writer.WriteAsync((message, payload.Length), _lifetime.Token);
             }
         }
         catch (OperationCanceledException)
@@ -352,8 +396,10 @@ public sealed class PeerConnection : IAsyncDisposable
     {
         try
         {
-            await foreach (var message in _handlerQueue.Reader.ReadAllAsync())
+            await foreach (var (message, bytes) in _handlerQueue.Reader.ReadAllAsync())
             {
+                Interlocked.Add(ref _handlerQueuedBytes, -bytes);
+                _handlerDequeued.Release();
                 if (_lifetime.IsCancellationRequested)
                     return;
                 if (MessageHandler is { } handler)

@@ -353,13 +353,16 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
                 throw new ArgumentException(Loc.T("clipboard.writingFilesRequiresTheListAnd"));
             // Valida i nomi ricevuti: se l'elenco è pericoloso non si tocca la clipboard.
             var offered = new VirtualFileDataObject(content.Files, files, _formats);
-            _lastWritten = content;
-            _offeredFiles = offered;
             for (var attempt = 0; ; attempt++)
             {
-                var hr = OleNative.OleSetClipboard(_offeredFiles);
+                var hr = OleNative.OleSetClipboard(offered);
                 if (hr == 0)
+                {
+                    // Solo a scrittura riuscita: l'avviso di modifica arriva dopo, su questo stesso thread.
+                    _lastWritten = content;
+                    _offeredFiles = offered;
                     return;
+                }
                 if (hr != CLIPBRD_E_CANT_OPEN || attempt >= 10)
                     Marshal.ThrowExceptionForHR(hr);
                 Thread.Sleep(20);
@@ -369,12 +372,23 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
         // La decodifica dell'immagine avviene prima di aprire la clipboard, per non bloccarla.
         var dib = content is { Kind: ClipboardContentKind.Image, ImagePng: { } receivedPng } ? TryConvertReceivedPngToDib(receivedPng) : null;
 
-        _lastWritten = content;
-        _offeredFiles = null;
         OpenWithRetry();
         try
         {
             Native.EmptyClipboard();
+            // I marcatori vanno prima del contenuto: se una Set successiva fallisce, quanto è già nella
+            // clipboard resta comunque fuori da cronologia e cloud, e il monitor non lo rimanda in sessione.
+            Set(_formats.OwnWriteMarker, [1]);
+            // Fuori dalla cronologia Win+V e dalla clipboard cloud.
+            Set(_formats.CanIncludeInHistory, BitConverter.GetBytes(0u));
+            Set(_formats.CanUploadToCloud, BitConverter.GetBytes(0u));
+            // Un contenuto sensibile ricevuto (password da un amico affidabile) resta sensibile anche
+            // qui: gli altri programmi che osservano la clipboard lo ignorano come quello originale.
+            if (content.IsMarkedSensitive)
+                Set(_formats.ExcludeFromMonitor, [0]);
+            // Assegnati prima di chiudere la clipboard, cioè prima che arrivi l'avviso di modifica.
+            _lastWritten = content;
+            _offeredFiles = null;
             switch (content.Kind)
             {
                 case ClipboardContentKind.Text:
@@ -386,16 +400,6 @@ public sealed class WindowsClipboard : IClipboardMonitor, IClipboardWriter
                         Set(Native.CF_DIB, dib);
                     break;
             }
-
-            // Fuori dalla cronologia Win+V e dalla clipboard cloud. Il monitor riconosce comunque la
-            // scrittura come nostra grazie al marcatore, che controlla prima di questi formati.
-            Set(_formats.CanIncludeInHistory, BitConverter.GetBytes(0u));
-            Set(_formats.CanUploadToCloud, BitConverter.GetBytes(0u));
-            // Un contenuto sensibile ricevuto (password da un amico affidabile) resta sensibile anche
-            // qui: gli altri programmi che osservano la clipboard lo ignorano come quello originale.
-            if (content.IsMarkedSensitive)
-                Set(_formats.ExcludeFromMonitor, [0]);
-            Set(_formats.OwnWriteMarker, [1]);
         }
         finally
         {

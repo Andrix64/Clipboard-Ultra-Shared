@@ -139,7 +139,8 @@ public sealed class FriendTests : IAsyncLifetime
 
         Assert.Equal(AgreementLevel.None, luca.Node.Friends.AgreementWith(andrea.Node.Identity.DeviceId));
         await Eventually.TrueAsync(() => andrea.Node.Friends.AgreementWith(luca.Node.Identity.DeviceId) == AgreementLevel.None, "il patto cade anche per andrea");
-        Assert.Contains(andrea.Notifier.Infos, m => m.Contains("sciolto", StringComparison.Ordinal));
+        // L'avviso parte subito dopo l'abbassamento del patto (ApplyFriendSync): va atteso anch'esso.
+        await Eventually.TrueAsync(() => andrea.Notifier.Infos.Any(m => m.Contains("sciolto", StringComparison.Ordinal)), "andrea viene avvisata");
         Assert.NotNull(luca.Node.Session);
     }
 

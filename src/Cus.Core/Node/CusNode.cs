@@ -28,6 +28,7 @@ public sealed partial class CusNode : IAsyncDisposable
 
     /// <summary>Connessioni in fase iniziale da uno stesso indirizzo (il loopback, usato dalle istanze locali, è escluso).</summary>
     private const int MaxPendingIncomingPerAddress = 4;
+    private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan FileReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PeerExpiry = TimeSpan.FromSeconds(15);
 
@@ -36,6 +37,9 @@ public sealed partial class CusNode : IAsyncDisposable
 
     /// <summary>Annunci di scoperta ricordati: oltre, i nuovi si ignorano finché i vecchi non scadono.</summary>
     private const int MaxDiscovered = 256;
+
+    /// <summary>Peer scoperti accettati da uno stesso indirizzo (più istanze per PC sono legittime).</summary>
+    private const int MaxDiscoveredPerAddress = 8;
 
     private readonly CusNodeOptions _options;
     private readonly CusDatabase _database;
@@ -65,6 +69,14 @@ public sealed partial class CusNode : IAsyncDisposable
 
     /// <summary>Le copie locali si elaborano una alla volta, nell'ordine in cui sono avvenute.</summary>
     private readonly Channel<ClipboardChangedEventArgs> _localChanges = Channel.CreateUnbounded<ClipboardChangedEventArgs>(
+        new UnboundedChannelOptions { SingleReader = true });
+
+    /// <summary>
+    /// Copie ricevute da scrivere nella clipboard di questo PC. Si decidono sotto _gate, nell'ordine dei
+    /// numeri di sequenza, e si scrivono qui fuori: una clipboard occupata (un altro programma, o un
+    /// incolla di file in corso) non deve fermare la sessione.
+    /// </summary>
+    private readonly Channel<ClipboardWrite> _clipboardWrites = Channel.CreateUnbounded<ClipboardWrite>(
         new UnboundedChannelOptions { SingleReader = true });
 
     private TcpListener? _listener;
@@ -289,6 +301,7 @@ public sealed partial class CusNode : IAsyncDisposable
         }
 
         RunInBackground(ProcessLocalChangesAsync);
+        RunInBackground(ProcessClipboardWritesAsync);
         RunInBackground(WatchTransfersAsync);
         _monitor.Start();
         Log(Loc.T("node.listeningOnPort", Port));
@@ -380,252 +393,6 @@ public sealed partial class CusNode : IAsyncDisposable
     {
         _database.RemoveManualPeer(PeerEndpoint.Parse(address).ToString());
         PeersChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    // ================================================================ connessioni
-
-    private TcpListener BindListener()
-    {
-        if (_options.Port is { } fixedPort)
-        {
-            var listener = new TcpListener(_options.BindAddress, fixedPort);
-            listener.Start();
-            return listener;
-        }
-
-        for (var port = NetworkDefaults.DefaultPort; port <= NetworkDefaults.PortRangeEnd; port++)
-        {
-            var listener = new TcpListener(_options.BindAddress, port);
-            try
-            {
-                listener.Start();
-                return listener;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode is SocketError.AddressAlreadyInUse or SocketError.AccessDenied)
-            {
-                // Porta occupata (anche da una connessione in uscita): si prova la successiva.
-            }
-        }
-
-        throw new CusOperationException(
-            Loc.T("node.noFreePortBetweenAndClose", NetworkDefaults.DefaultPort, NetworkDefaults.PortRangeEnd));
-    }
-
-    private async Task AcceptLoopAsync()
-    {
-        while (!_lifetime.IsCancellationRequested)
-        {
-            TcpClient client;
-            try
-            {
-                client = await _listener!.AcceptTcpClientAsync(_lifetime.Token);
-            }
-            catch (Exception) when (_lifetime.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (SocketException)
-            {
-                continue;
-            }
-
-            // Chiunque in rete può collegarsi: oltre un certo numero di connessioni ancora in fase
-            // iniziale le nuove si rifiutano subito, invece di accumulare memoria e task.
-            var address = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
-            if (!TryTakePendingSlot(address))
-            {
-                client.Dispose();
-                continue;
-            }
-
-            RunInBackground(async () =>
-            {
-                try
-                {
-                    await HandleIncomingAsync(client);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Trace.WriteLine($"CUS: errore nella connessione in ingresso: {ex}");
-                }
-                finally
-                {
-                    ReleasePendingSlot(address);
-                }
-            });
-        }
-    }
-
-    /// <summary>Uno slot globale più uno per indirizzo: un solo PC in rete non li occupa tutti.</summary>
-    private bool TryTakePendingSlot(IPAddress? address)
-    {
-        var perAddress = address is not null && !IPAddress.IsLoopback(address);
-        if (perAddress)
-        {
-            var count = _pendingByAddress.AddOrUpdate(address!, 1, (_, n) => n + 1);
-            if (count > MaxPendingIncomingPerAddress)
-            {
-                ReleaseAddress(address!);
-                return false;
-            }
-        }
-
-        if (_incomingSlots.Wait(0))
-            return true;
-        if (perAddress)
-            ReleaseAddress(address!);
-        return false;
-    }
-
-    private void ReleasePendingSlot(IPAddress? address)
-    {
-        _incomingSlots.Release();
-        if (address is not null && !IPAddress.IsLoopback(address))
-            ReleaseAddress(address);
-    }
-
-    private void ReleaseFileRead(PeerConnection connection)
-    {
-        if (_fileReadsByConnection.AddOrUpdate(connection, 0, (_, n) => n - 1) <= 0)
-            _fileReadsByConnection.TryRemove(new KeyValuePair<PeerConnection, int>(connection, 0));
-    }
-
-    private void ReleaseAddress(IPAddress address)
-    {
-        if (_pendingByAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0)
-            _pendingByAddress.TryRemove(new KeyValuePair<IPAddress, int>(address, 0));
-    }
-
-    /// <summary>
-    /// Handshake, saluto e scambio del livello del patto: comune a ogni connessione. Entrambi tengono
-    /// il più basso dei due, così un patto sciolto da una parte (magari a PC spento) cade anche dall'altra.
-    /// </summary>
-    private async Task<PeerConnection> SetUpConnectionAsync(PeerConnection connection)
-    {
-        _connections[connection] = 0;
-        connection.Closed += (c, _1) => _connections.TryRemove(c, out byte _);
-
-        var remote = connection.Remote;
-        await connection.SendAsync(new FriendSyncMessage(Friends.AgreementWith(remote.DeviceId)));
-        var sync = await connection.ReceiveAsync<FriendSyncMessage>(PeerConnection.HandshakeTimeout, maxBytes: FriendSyncMaxBytes);
-        ApplyFriendSync(connection, sync.Level);
-        RememberEndpoint(connection);
-        return connection;
-    }
-
-    private async Task<PeerConnection> ConnectAsync(string host, int port, CancellationToken cancellationToken)
-    {
-        PeerConnection connection;
-        try
-        {
-            connection = await PeerConnection.ConnectAsync(host, port, Identity, Port, cancellationToken);
-        }
-        catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException or ProtocolException)
-        {
-            throw new CusOperationException(Loc.T("node.canTConnectTo", new PeerEndpoint(host, port), Describe(ex)), ex);
-        }
-
-        try
-        {
-            return await SetUpConnectionAsync(connection);
-        }
-        catch (Exception ex) when (ex is not CusOperationException)
-        {
-            connection.Close(Loc.T("node.initialError"));
-            throw new CusOperationException(Loc.T("node.connectionToFailed", new PeerEndpoint(host, port), Describe(ex)), ex);
-        }
-    }
-
-    private async Task HandleIncomingAsync(TcpClient client)
-    {
-        PeerConnection? connection = null;
-        try
-        {
-            // Assegnata prima della fase iniziale: se questa fallisce la connessione va chiusa (e tolta
-            // da _connections), non solo il socket.
-            connection = await PeerConnection.AcceptAsync(client, Identity, Port, _lifetime.Token, RevealsIdentityTo);
-            await SetUpConnectionAsync(connection);
-            var first = await connection.ReceiveAsync(FirstMessageTimeout, maxBytes: FirstMessageMaxBytes);
-            switch (first)
-            {
-                case JoinRequestMessage:
-                    await HandleJoinRequestAsync(connection);
-                    break;
-                default:
-                    // Connessione di sola sincronizzazione del patto (o saluto): si chiude.
-                    connection.Close(Loc.T("node.end"));
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.WriteLine($"CUS: connessione in ingresso chiusa: {ex.Message}");
-            if (connection is not null)
-                connection.Close(Describe(ex));
-            else
-                client.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// A chi si collega questo PC dice chi è. Mentre si offre come host, a tutti (deve farsi trovare);
-    /// da nascosto solo agli amici con un patto, che sono gli unici a cui serve raggiungerlo così.
-    /// Gli altri non scoprono nemmeno quale PC c'è a quell'indirizzo (identità, nome, utente).
-    /// </summary>
-    private bool RevealsIdentityTo(string deviceId) =>
-        _visible || _hostSession is { Offered: true } || Friends.AgreementWith(deviceId) != AgreementLevel.None;
-
-    // ================================================================ scoperta
-
-    /// <summary>Annuncio di questo PC: solo mentre si offre come host.</summary>
-    private AnnouncementPayload? AnnouncementOrNull() =>
-        _visible ? new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port, Math.Max(1, Session?.Participants.Count ?? 1)) : null;
-
-    private void OnAnnounced(DiscoveryAnnouncement announcement)
-    {
-        // Chiave = ID + indirizzo: gli annunci sono firmati, ma uno vero rispedito da un altro indirizzo
-        // non sostituisce l'originale, compare accanto (e la richiesta lì fallisce la verifica d'identità).
-        var key = $"{announcement.DeviceId}|{announcement.Host}|{announcement.Port}";
-        if (announcement.Hidden)
-        {
-            if (_discovered.TryRemove(key, out _))
-                PeersChanged?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        var isNew = !_discovered.TryGetValue(key, out var previous);
-        if (isNew && _discovered.Count >= MaxDiscovered)
-        {
-            foreach (var (oldKey, old) in _discovered)
-            {
-                if (now - old.Seen >= PeerExpiry)
-                    _discovered.TryRemove(oldKey, out _);
-            }
-
-            if (_discovered.Count >= MaxDiscovered)
-                return;
-        }
-
-        _discovered[key] = (announcement, now);
-        if (isNew || previous.Announcement != announcement)
-            PeersChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>Annuncia subito lo stato (per esempio quanti sono nella sessione).</summary>
-    private void AnnounceSoon()
-    {
-        if (_visible && _discovery is { } discovery)
-            RunInBackground(discovery.AnnounceNowAsync);
-    }
-
-    /// <summary>Memorizza dove raggiungere un amico, anche quando non si annuncia.</summary>
-    private void RememberEndpoint(PeerConnection connection)
-    {
-        if (connection.RemoteEndPoint is not IPEndPoint ip || connection.RemoteListenPort is <= 0 or > 65535)
-            return;
-        var address = ip.Address.IsIPv4MappedToIPv6 ? ip.Address.MapToIPv4() : ip.Address;
-        Friends.RememberEndpoint(connection.Remote.DeviceId, connection.Remote.DisplayName, address.ToString(), connection.RemoteListenPort);
     }
 
     private async Task ProcessLocalChangesAsync()

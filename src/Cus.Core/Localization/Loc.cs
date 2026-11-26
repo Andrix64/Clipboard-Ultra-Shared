@@ -61,11 +61,27 @@ public static class Loc
     /// </summary>
     public static string T(string key, params object?[] args) => Get(_current, key, args);
 
-    /// <summary>Come <see cref="T"/>, in una lingua precisa.</summary>
+    /// <summary>
+    /// Come <see cref="T"/>, in una lingua precisa. Numeri e date seguono quella lingua, non le impostazioni
+    /// del sistema: un testo italiano mostra "1.234", uno inglese "1,234".
+    /// </summary>
     public static string Get(string code, string key, params object?[] args)
     {
         var template = Template(code, key) ?? Template(FallbackCode, key) ?? key;
-        return args.Length == 0 ? template : string.Format(CultureInfo.CurrentCulture, template, args);
+        return args.Length == 0 ? template : string.Format(FormatCulture(code), template, args);
+    }
+
+    private static CultureInfo FormatCulture(string code)
+    {
+        try
+        {
+            return CultureInfo.GetCultureInfo(code);
+        }
+        catch (CultureNotFoundException)
+        {
+            // Senza dati di globalizzazione (modalità invariante) resta la cultura del sistema.
+            return CultureInfo.CurrentCulture;
+        }
     }
 
     /// <summary>Il testo grezzo della chiave in una lingua (segnaposto non riempiti); null se manca.</summary>
