@@ -1,5 +1,6 @@
-# Pacchetti .deb e .rpm di CUS, costruiti con nfpm da build-packages.sh, che imposta le variabili
-# ${...}: VERSION, NFPM_ARCH (amd64 | arm64), PUBLISH_DIR (app self-contained), ASSETS_DIR (icona).
+# Pacchetti .deb e .rpm di CUS, costruiti con nfpm da build-packages.sh. Lo script imposta VERSION e
+# NFPM_ARCH (amd64 | arm64) e lancia nfpm da una cartella con app/ (l'app self-contained), cus.desktop
+# e cus.png: nfpm espande le variabili solo nei campi come version e arch, non nei percorsi dei file.
 # L'app si installa in /opt/cus, con il comando /usr/bin/cus, il lanciatore e l'icona.
 name: cus
 arch: ${NFPM_ARCH}
@@ -16,7 +17,7 @@ description: |-
   Secret Service keyring (GNOME Keyring, KWallet or KeePassXC).
 
 contents:
-  - src: ${PUBLISH_DIR}
+  - src: ./app
     dst: /opt/cus
     type: tree
   - src: /opt/cus/cus
@@ -26,7 +27,7 @@ contents:
     dst: /usr/share/applications/cus.desktop
     file_info:
       mode: 0644
-  - src: ${ASSETS_DIR}/cus.png
+  - src: ./cus.png
     dst: /usr/share/icons/hicolor/256x256/apps/cus.png
     file_info:
       mode: 0644

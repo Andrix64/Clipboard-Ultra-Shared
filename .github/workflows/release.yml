@@ -132,6 +132,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
+      # Un'architettura che fallisce non ferma l'altra: l'errore di ognuna resta visibile.
+      fail-fast: false
       matrix:
         rid: [linux-x64, linux-arm64]
     env:

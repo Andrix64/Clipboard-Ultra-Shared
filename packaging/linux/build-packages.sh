@@ -45,10 +45,13 @@ python3 "$here/extract-icon.py" "$root/src/Cus.UI/Assets/cus.ico" 256 "$work/cus
 # Archivio: la cartella dell'app, da estrarre dove si vuole.
 tar -czf "$out/$name.tar.gz" -C "$work" "$name"
 
-# .deb e .rpm (nfpm risolve i percorsi relativi del file di configurazione dalla cartella corrente).
-export VERSION="$version" NFPM_ARCH="$nfpm_arch" PUBLISH_DIR="$app" ASSETS_DIR="$work"
-(cd "$here" && "$NFPM" package --config nfpm.yaml --packager deb --target "$out/cus_${version}_${nfpm_arch}.deb")
-(cd "$here" && "$NFPM" package --config nfpm.yaml --packager rpm --target "$out/cus-${version}-1.${appimage_arch}.rpm")
+# .deb e .rpm: nfpm legge i file con i percorsi relativi di nfpm.yaml, dalla cartella di lavoro.
+mv "$app" "$work/app"
+app="$work/app"
+cp "$here/nfpm.yaml" "$here/cus.desktop" "$work/"
+export VERSION="$version" NFPM_ARCH="$nfpm_arch"
+(cd "$work" && "$NFPM" package --config nfpm.yaml --packager deb --target "$out/cus_${version}_${nfpm_arch}.deb")
+(cd "$work" && "$NFPM" package --config nfpm.yaml --packager rpm --target "$out/cus-${version}-1.${appimage_arch}.rpm")
 
 # AppImage: l'app in usr/lib/cus, avviata da AppRun. Runtime fissato invece di quello scaricato da
 # appimagetool; senza FUSE (come sui runner) appimagetool si estrae ed esegue da sé.
