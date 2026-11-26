@@ -104,6 +104,9 @@ public sealed partial record CusOptions
 
     public bool EnableDiscovery { get; init; } = true;
 
+    /// <summary>Parte nell'area di notifica senza aprire la finestra (avvio automatico all'accesso).</summary>
+    public bool StartInTray { get; init; }
+
     /// <exception cref="ArgumentException">Argomento sconosciuto o valore non valido.</exception>
     public static CusOptions Parse(IReadOnlyList<string> args)
     {
@@ -143,6 +146,9 @@ public sealed partial record CusOptions
                     break;
                 case "--no-discovery":
                     options = options with { EnableDiscovery = false };
+                    break;
+                case "--tray":
+                    options = options with { StartInTray = true };
                     break;
                 default:
                     throw new ArgumentException(Loc.T("options.unknownArgument", name, Usage));

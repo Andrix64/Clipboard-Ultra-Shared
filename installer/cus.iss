@@ -59,6 +59,11 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [INI]
 Filename: "{app}\cus.ini"; Section: "Setup"; Key: "Language"; String: "{language}"
 
+; L'avvio all'accesso a Windows lo registra CUS stesso (HKCU\...\Run, impostazione attiva di default):
+; qui lo si rimuove soltanto alla disinstallazione, senza mai crearlo.
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "CUS"; ValueType: none; Flags: uninsdeletevalue dontcreatekey
+
 [UninstallDelete]
 Type: files; Name: "{app}\cus.ini"
 

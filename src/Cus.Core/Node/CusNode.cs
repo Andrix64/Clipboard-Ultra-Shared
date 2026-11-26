@@ -233,6 +233,13 @@ public sealed partial class CusNode : IAsyncDisposable
         set => _database.SetSetting("ui/run-in-background", value ? "1" : "0");
     }
 
+    /// <summary>CUS parte all'accesso al sistema operativo. Attivo finché l'utente non lo spegne.</summary>
+    public bool LaunchAtLogin
+    {
+        get => _database.GetSetting("app/launch-at-login") != "0";
+        set => _database.SetSetting("app/launch-at-login", value ? "1" : "0");
+    }
+
     /// <summary>
     /// Codice della lingua dell'interfaccia scelta dall'utente; null se non l'ha mai scelta (vale quella
     /// dell'installer) o se non è più disponibile.

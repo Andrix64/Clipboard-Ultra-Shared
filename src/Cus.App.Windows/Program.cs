@@ -175,6 +175,27 @@ internal static class Program
 
         port = node.Port;
 
+        // Avvio all'accesso a Windows: solo il profilo predefinito con la clipboard reale (le istanze di
+        // prova non devono partire da sole). Attivo di default; a ogni avvio si riallinea il registro
+        // all'impostazione, così un CUS spostato o aggiornato in un'altra cartella resta registrato giusto.
+        IAutoStart? autoStart = null;
+        if (options.Profile == CusOptions.DefaultProfile && options.ClipboardMode == ClipboardMode.Real
+            && Environment.ProcessPath is { } exePath)
+        {
+            autoStart = new RegistryAutoStart(exePath);
+            try
+            {
+                if (node.LaunchAtLogin)
+                    autoStart.Enable();
+                else
+                    autoStart.Disable();
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                Trace.WriteLine($"CUS: avvio automatico non aggiornato: {ex.Message}");
+            }
+        }
+
         return new MainWindowModel
         {
             Title = $"CUS — {identity.DisplayName}",
@@ -183,6 +204,8 @@ internal static class Program
             Notifier = notifier,
             Simulation = simulation,
             Shutdown = Shutdown,
+            AutoStart = autoStart,
+            StartInTray = options.StartInTray,
         };
     }
 

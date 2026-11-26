@@ -1,3 +1,4 @@
+using Cus.Core.Abstractions;
 using Cus.Core.Node;
 
 namespace Cus.UI;
@@ -27,6 +28,12 @@ public sealed record MainWindowModel
 
     /// <summary>C'è l'icona nell'area di notifica: la finestra si può chiudere lasciando CUS attivo.</summary>
     public bool HasTrayIcon { get; init; }
+
+    /// <summary>Avvio automatico all'accesso; null per le istanze che non devono averlo (profili di prova, clipboard simulata).</summary>
+    public IAutoStart? AutoStart { get; init; }
+
+    /// <summary>Parte nell'area di notifica senza mostrare la finestra (avvio automatico all'accesso).</summary>
+    public bool StartInTray { get; init; }
 
     /// <summary>Chiamato alla chiusura della finestra principale, per fermare nodo e piattaforma.</summary>
     public Func<Task>? Shutdown { get; init; }

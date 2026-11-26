@@ -46,7 +46,16 @@ public partial class App : Application
 
                 window = new MainWindow(model with { HasTrayIcon = true });
                 window.Closed += (_, _) => tray.IsVisible = false;
-                desktop.MainWindow = window;
+                if (model.StartInTray)
+                {
+                    // Avvio all'accesso a Windows: solo l'icona nell'area di notifica. Il lifetime mostra la
+                    // finestra principale assegnata prima del suo avvio, quindi la si assegna subito dopo.
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() => desktop.MainWindow = window);
+                }
+                else
+                {
+                    desktop.MainWindow = window;
+                }
             }
             else
             {

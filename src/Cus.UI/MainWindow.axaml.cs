@@ -748,6 +748,9 @@ public partial class MainWindow : Window
             var on = node.KeepRunningInBackground;
             BackgroundToggle.Content = on ? Loc.T("main.yes") : Loc.T("main.no");
             BackgroundToggle.Classes.Set("active", on);
+            var atLogin = node.LaunchAtLogin;
+            LaunchAtLoginToggle.Content = atLogin ? Loc.T("main.yes") : Loc.T("main.no");
+            LaunchAtLoginToggle.Classes.Set("active", atLogin);
             foreach (var (code, button) in languageButtons)
                 button.Classes.Set("active", Loc.Current == code);
         }
@@ -760,6 +763,29 @@ public partial class MainWindow : Window
             Update();
         };
         BackgroundToggle.IsEnabled = _model.HasTrayIcon;
+
+        LaunchAtLoginToggle.Click += (_, _) =>
+        {
+            if (_model.AutoStart is not { } autoStart)
+                return;
+            var on = !node.LaunchAtLogin;
+            try
+            {
+                if (on)
+                    autoStart.Enable();
+                else
+                    autoStart.Disable();
+                node.LaunchAtLogin = on;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                // Registro bloccato da criteri o antivirus: l'impostazione resta com'era.
+                AddActivity("! " + Loc.T("main.launchAtLoginFailed", ex.Message));
+            }
+            Update();
+        };
+        // Solo il profilo predefinito con la clipboard reale: le istanze di prova non partono all'accesso.
+        LaunchAtLoginToggle.IsEnabled = _model.AutoStart is not null;
         Update();
 
         async Task SaveName()

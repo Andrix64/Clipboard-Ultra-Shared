@@ -40,6 +40,13 @@ public class CusOptionsTests
         Assert.True(CusOptions.Parse([]).EnableDiscovery);
     }
 
+    [Fact]
+    public void Parse_Tray_StartsInTray_OnlyWhenRequested()
+    {
+        Assert.True(CusOptions.Parse(["--tray"]).StartInTray);
+        Assert.False(CusOptions.Parse([]).StartInTray);
+    }
+
     [Theory]
     [InlineData("--unknown")]
     [InlineData("--profile")]
