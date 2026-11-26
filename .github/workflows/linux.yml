@@ -1,0 +1,61 @@
+# Build e test di CUS su Linux a ogni push su main e a ogni pull request. I test della piattaforma
+# Linux girano su una clipboard X11 vera (Xvfb, con xclip come "altra applicazione") e su un
+# portachiavi Secret Service usa e getta (gnome-keyring-daemon in una sessione D-Bus privata).
+name: Linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Dipendenze di sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth xclip libx11-6 libxfixes3 libsecret-1-0 gnome-keyring dbus
+
+      - name: Build dell'app Linux
+        run: dotnet build src/Cus.App.Linux/Cus.App.Linux.csproj -c Release
+
+      - name: Test del nucleo
+        run: dotnet test tests/Cus.Core.Tests/Cus.Core.Tests.csproj -c Release
+
+      - name: Test di integrazione
+        run: dotnet test tests/Cus.IntegrationTests/Cus.IntegrationTests.csproj -c Release
+
+      # Il portachiavi si sblocca con una password qualunque letta da stdin: esiste solo per questo job.
+      - name: Test della piattaforma Linux (Xvfb + Secret Service)
+        env:
+          CUS_TEST_SECRET_SERVICE: '1'
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "ci" | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            xvfb-run -a dotnet test tests/Cus.Platform.Linux.Tests/Cus.Platform.Linux.Tests.csproj -c Release
+          '
+
+      - name: Pubblicazione linux-x64
+        run: >
+          dotnet publish src/Cus.App.Linux/Cus.App.Linux.csproj -c Release -r linux-x64 --self-contained
+          -p:DebugType=none -o artifacts/publish/linux-x64
