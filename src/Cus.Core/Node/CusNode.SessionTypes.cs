@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Threading.Channels;
 using Cus.Core.Abstractions;
 using Cus.Core.Identity;
 using Cus.Core.Net;
@@ -98,7 +97,11 @@ public sealed partial class CusNode
 
     /// <summary>
     /// Coda d'invio verso un membro: si riempie sotto _gate e la svuota un ciclo per membro, fuori dal
-    /// lock. Limitata per numero e per byte: oltre, il membro non tiene il passo e va scollegato.
+    /// lock. Limitata per numero e per byte. Della clipboard conta solo l'ultima copia: a coda piena le
+    /// copie in attesa già superate da quella nuova si scartano, così un membro che legge ma è più lento
+    /// di una raffica di copie grandi resta nella sessione e riceve l'ultima. Va scollegato chi non tiene
+    /// il passo neanche così (coda piena di altri messaggi) o chi non legge più: un invio fermo da
+    /// <see cref="StallTimeout"/> con altri messaggi in attesa.
     /// </summary>
     private sealed class MemberOutbox
     {
@@ -107,36 +110,78 @@ public sealed partial class CusNode
         /// <summary>Qualche copia grande (immagini, testi lunghi) in attesa, non centinaia di MB.</summary>
         private const long MaxBytes = 32L * 1024 * 1024;
 
-        private readonly Channel<(CusMessage Message, int Bytes)> _queue =
-            Channel.CreateUnbounded<(CusMessage, int)>(new UnboundedChannelOptions { SingleReader = true });
+        /// <summary>
+        /// Un invio che non finisce entro questo tempo, con altro in coda, è di un membro che non legge.
+        /// Più breve di <see cref="PeerConnection.SendTimeout"/>: senza traffico in attesa decide quello.
+        /// </summary>
+        public static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(8);
 
+        private static readonly TimeSpan StallCheckInterval = TimeSpan.FromMilliseconds(500);
+
+        private readonly Lock _lock = new();
+        private readonly LinkedList<(CusMessage Message, int Bytes)> _queue = new();
+
+        /// <summary>Un permesso per messaggio accodato (o per la chiusura): il ciclo d'invio si sveglia.</summary>
+        private readonly SemaphoreSlim _available = new(0);
+
+        // Sotto _lock: messaggi e byte in coda più quello in invio.
         private int _count;
         private long _bytes;
+        private bool _completed;
 
-        /// <returns>False se la coda è piena (o chiusa): il messaggio non è stato accodato.</returns>
+        /// <returns>False se la coda è piena anche senza le copie superate (o chiusa): il messaggio non è stato accodato.</returns>
         public bool TryEnqueue(CusMessage message, int bytes)
         {
-            var count = Interlocked.Increment(ref _count);
-            var total = Interlocked.Add(ref _bytes, bytes);
-            if ((count <= MaxMessages && total <= MaxBytes) && _queue.Writer.TryWrite((message, bytes)))
-                return true;
-            Interlocked.Decrement(ref _count);
-            Interlocked.Add(ref _bytes, -bytes);
-            return false;
+            lock (_lock)
+            {
+                if (_completed)
+                    return false;
+                if (Overflows(bytes) && message is ClipboardItemMessage)
+                    DropSupersededCopies();
+                if (Overflows(bytes))
+                    return false;
+                _queue.AddLast((message, bytes));
+                _count++;
+                _bytes += bytes;
+            }
+
+            _available.Release();
+            return true;
         }
 
-        public void Complete() => _queue.Writer.TryComplete();
+        public void Complete()
+        {
+            lock (_lock)
+                _completed = true;
+            _available.Release();
+        }
 
         /// <summary>Invia in ordine finché la connessione vive. Un invio fallito la chiude (PeerConnection).</summary>
         public async Task PumpAsync(PeerConnection connection, Action<string> log)
         {
             try
             {
-                await foreach (var (message, bytes) in _queue.Reader.ReadAllAsync(connection.Lifetime))
+                while (true)
                 {
+                    await _available.WaitAsync(connection.Lifetime);
+                    (CusMessage Message, int Bytes) next;
+                    lock (_lock)
+                    {
+                        // Permesso di una copia scartata perché superata: niente da inviare.
+                        if (_queue.First is not { } first)
+                        {
+                            if (_completed)
+                                return;
+                            continue;
+                        }
+
+                        next = first.Value;
+                        _queue.RemoveFirst();
+                    }
+
                     try
                     {
-                        await connection.SendAsync(message);
+                        await SendWatchingForStallAsync(connection, next.Message, log);
                     }
                     catch (MessageTooLargeException)
                     {
@@ -144,8 +189,11 @@ public sealed partial class CusNode
                     }
                     finally
                     {
-                        Interlocked.Decrement(ref _count);
-                        Interlocked.Add(ref _bytes, -bytes);
+                        lock (_lock)
+                        {
+                            _count--;
+                            _bytes -= next.Bytes;
+                        }
                     }
                 }
             }
@@ -153,6 +201,57 @@ public sealed partial class CusNode
             {
                 // Membro caduto o sessione chiusa: lo rimuove OnMemberClosedAsync.
             }
+        }
+
+        /// <summary>Sotto _lock.</summary>
+        private bool Overflows(int bytes) => _count + 1 > MaxMessages || _bytes + bytes > MaxBytes;
+
+        /// <summary>Sotto _lock: toglie le copie in attesa (non quella in invio); quella nuova le supera tutte.</summary>
+        private void DropSupersededCopies()
+        {
+            for (var node = _queue.First; node is not null;)
+            {
+                var following = node.Next;
+                if (node.Value.Message is ClipboardItemMessage)
+                {
+                    _queue.Remove(node);
+                    _count--;
+                    _bytes -= node.Value.Bytes;
+                }
+
+                node = following;
+            }
+        }
+
+        private bool HasBacklog()
+        {
+            lock (_lock)
+                return _queue.Count > 0;
+        }
+
+        /// <summary>
+        /// Invia un messaggio; se resta fermo per <see cref="StallTimeout"/> mentre altri aspettano, il
+        /// membro non sta leggendo: si scollega (l'invio in corso fallisce con la connessione).
+        /// </summary>
+        private async Task SendWatchingForStallAsync(PeerConnection connection, CusMessage message, Action<string> log)
+        {
+            var started = Environment.TickCount64;
+            var sending = connection.SendAsync(message);
+            using var watch = CancellationTokenSource.CreateLinkedTokenSource(connection.Lifetime);
+            while (!sending.IsCompleted && !watch.IsCancellationRequested)
+            {
+                await Task.WhenAny(sending, Task.Delay(StallCheckInterval, watch.Token));
+                if (!sending.IsCompleted && !connection.IsClosed
+                    && Environment.TickCount64 - started >= StallTimeout.TotalMilliseconds && HasBacklog())
+                {
+                    log(Loc.T("session.isnTReceivingCopiesFastEnough", connection.Remote.DisplayName));
+                    connection.Close(Loc.T("session.tooSlowReceivingCopies"));
+                    break;
+                }
+            }
+
+            await watch.CancelAsync();
+            await sending;
         }
     }
 

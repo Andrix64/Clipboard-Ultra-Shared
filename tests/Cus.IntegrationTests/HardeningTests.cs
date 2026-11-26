@@ -391,6 +391,47 @@ public sealed class HardeningTests : IAsyncLifetime
         await Eventually.TrueAsync(() => luca.Node.Session?.MyGranted == ShareDirection.ReadOnly, "lo stato arriva a luca");
     }
 
+    [Fact]
+    public async Task MemberThatReadsSlowly_DuringABurst_StaysAndGetsTheLastCopy()
+    {
+        var host = await Start("host");
+        await host.ShowAsync();
+        await using var slow = await JoinRawAsync(host);
+
+        // Legge, ma più piano di quanto l'host accodi: prima, oltre 32 MB in coda, veniva scollegato.
+        var received = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var reading = new CancellationTokenSource();
+        var reader = Task.Run(async () =>
+        {
+            try
+            {
+                while (!reading.IsCancellationRequested)
+                {
+                    if (await slow.ReceiveAsync(TimeSpan.FromSeconds(30), reading.Token) is ClipboardItemMessage item)
+                        received.Enqueue(item.Content.Text![..2]);
+                    await Task.Delay(150, reading.Token);
+                }
+            }
+            catch (Exception) when (reading.IsCancellationRequested)
+            {
+                // Fine del test.
+            }
+        });
+
+        var big = new string('x', 1_900_000);
+        for (var i = 0; i < 40; i++)
+            host.Copy($"{i:D2}{big}");
+
+        await Eventually.TrueAsync(() => received.ToArray().LastOrDefault() == "39", "il membro lento riceve l'ultima copia", timeoutMs: 30_000);
+        Assert.Equal(2, host.Node.Session?.Participants.Count);
+        // Le copie superate sono state scartate, non ricevute in disordine.
+        var copies = received.ToArray();
+        Assert.True(copies.Length < 40);
+        Assert.Equal(copies.Order(StringComparer.Ordinal), copies);
+        await reading.CancelAsync();
+        await reader;
+    }
+
     /// <summary>Un "membro" scritto a mano: handshake, livello del patto, richiesta di ingresso.</summary>
     private static async Task<PeerConnection> JoinRawAsync(TestNode host, ShareDirection expected = ShareDirection.Bidirectional)
     {
