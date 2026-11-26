@@ -1,0 +1,5 @@
+# Script e file eseguiti su Linux: sempre con fine riga LF, anche in un checkout su Windows.
+*.sh text eol=lf
+packaging/linux/AppRun text eol=lf
+packaging/linux/*.desktop text eol=lf
+packaging/linux/*.yaml text eol=lf

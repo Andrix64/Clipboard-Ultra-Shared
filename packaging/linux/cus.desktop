@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=CUS
+GenericName=Clipboard sharing
+Comment=Share your clipboard in real time with other PCs on the local network
+Exec=cus
+Icon=cus
+Terminal=false
+Categories=Utility;Network;
+Keywords=clipboard;share;copy;paste;lan;

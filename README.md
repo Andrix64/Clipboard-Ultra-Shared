@@ -22,7 +22,13 @@ Share your clipboard in real time with other PCs on the same local network: with
 Every [release](../../releases) contains:
 
 - Windows: `cus-setup-<version>-win-x64.exe` (installer) or `cus-<version>-win-x64.zip` (portable);
-- Linux: `cus-<version>-linux-x64.tar.gz` or `cus-<version>-linux-arm64.tar.gz`, self-contained (no .NET runtime needed). Extract it and run `./cus` from the extracted folder;
+- Linux (x64 and arm64), all self-contained (no .NET runtime needed):
+  - Debian/Ubuntu: `sudo apt install ./cus_<version>_amd64.deb` (or `_arm64.deb`);
+  - Fedora/RHEL: `sudo dnf install ./cus-<version>-1.x86_64.rpm` (or `.aarch64.rpm`); openSUSE: `sudo zypper install` with the same file;
+  - any distribution: `cus-<version>-x86_64.AppImage` (or `aarch64`), make it executable and run it;
+  - or `cus-<version>-linux-x64.tar.gz` (or `linux-arm64`): extract it and run `./cus` from the extracted folder.
+
+  The `.deb` and `.rpm` install CUS in `/opt/cus` with the `cus` command and a launcher in the applications menu. The Linux packages are built by `packaging/linux/build-packages.sh`;
 - `SHA256SUMS.txt` to verify the downloads (`sha256sum -c SHA256SUMS.txt --ignore-missing`).
 
 ## Requirements

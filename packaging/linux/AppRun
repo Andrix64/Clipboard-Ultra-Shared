@@ -1,0 +1,4 @@
+#!/bin/sh
+# Punto d'ingresso dell'AppImage: avvia l'app self-contained montata accanto a questo script.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/lib/cus/cus" "$@"

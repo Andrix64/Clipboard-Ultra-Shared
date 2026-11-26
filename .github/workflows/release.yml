@@ -1,13 +1,15 @@
 # Pubblica una release di CUS quando si fa push di un tag vX.Y.Z:
 # - Windows: test, scripts/publish.ps1 (app self-contained + installer Inno Setup) e zip della cartella;
-# - Linux: archivi tar.gz self-contained (non serve .NET sul PC di destinazione) per x64 e arm64;
+# - Linux, per x64 e arm64: tar.gz, .deb, .rpm e AppImage, tutti self-contained (non serve .NET sul PC
+#   di destinazione), costruiti da packaging/linux/build-packages.sh e provati prima di pubblicarli;
 # - una GitHub Release con tutti i pacchetti e SHA256SUMS.txt.
 # Niente suffissi (-beta.1): VersionInfoVersion in installer/cus.iss accetta solo numeri.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
 #
 # Avvio manuale (Actions → Release → Run workflow, con un tag già rilasciato): costruisce solo i pacchetti
-# Linux e li aggiunge alla release esistente, senza ricostruire né sostituire quelli Windows già pubblicati.
+# Linux e aggiunge alla release esistente quelli che mancano, senza ricostruire né sostituire i file già
+# pubblicati.
 #
 # Sicurezza:
 # - I job che eseguono il codice del repository e i pacchetti NuGet hanno un token di sola lettura;
@@ -40,6 +42,14 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   INNO_SETUP_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe
   INNO_SETUP_SHA256: 8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0
+  # Strumenti per i pacchetti Linux: versioni fissate con il loro SHA256 (i runner sono x64).
+  NFPM_URL: https://github.com/goreleaser/nfpm/releases/download/v2.49.0/nfpm_2.49.0_Linux_x86_64.tar.gz
+  NFPM_SHA256: 2afaa5ffb5e3493402e31e7c67a5a1fb42133e3f66fc315ca0051934125561c7
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  APPIMAGE_RUNTIME_BASE_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108
+  APPIMAGE_RUNTIME_X86_64_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+  APPIMAGE_RUNTIME_AARCH64_SHA256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
 
 jobs:
   version:
@@ -127,10 +137,21 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       RID: ${{ matrix.rid }}
+      # Gli script di pacchettizzazione vengono dal commit di questo workflow, i sorgenti dal tag: all'avvio
+      # manuale su un tag vecchio gli script potrebbero non esserci ancora. Al push di un tag coincidono.
+      PACKAGING: ${{ github.workspace }}/.release-tools/packaging/linux
+      CUS_SOURCE_DIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: refs/tags/${{ needs.version.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tools
+          sparse-checkout: packaging
           persist-credentials: false
 
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
@@ -144,16 +165,53 @@ jobs:
           dotnet test tests/Cus.Core.Tests/Cus.Core.Tests.csproj -c Release
           dotnet test tests/Cus.IntegrationTests/Cus.IntegrationTests.csproj -c Release
 
+      - name: Strumenti di pacchettizzazione
+        run: |
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          fetch() { # url, sha256, destinazione
+            curl -fsSL --retry 3 -o "$3" "$1"
+            echo "$2  $3" | sha256sum -c -
+          }
+          fetch "$NFPM_URL" "$NFPM_SHA256" "$tools/nfpm.tar.gz"
+          tar -xzf "$tools/nfpm.tar.gz" -C "$tools" nfpm
+          fetch "$APPIMAGETOOL_URL" "$APPIMAGETOOL_SHA256" "$tools/appimagetool"
+          chmod +x "$tools/appimagetool"
+          if [[ "$RID" == linux-x64 ]]; then
+            runtime=runtime-x86_64; runtime_sha=$APPIMAGE_RUNTIME_X86_64_SHA256
+          else
+            runtime=runtime-aarch64; runtime_sha=$APPIMAGE_RUNTIME_AARCH64_SHA256
+          fi
+          fetch "$APPIMAGE_RUNTIME_BASE_URL/$runtime" "$runtime_sha" "$tools/$runtime"
+          {
+            echo "NFPM=$tools/nfpm"
+            echo "APPIMAGETOOL=$tools/appimagetool"
+            echo "APPIMAGE_RUNTIME=$tools/$runtime"
+          } >> "$GITHUB_ENV"
+
       # arm64 si compila da x64: l'app è .NET gestito e le librerie native arrivano già per architettura
       # dai pacchetti NuGet.
-      - name: Pubblica
+      - name: Pacchetti (tar.gz, deb, rpm, AppImage)
+        run: '"$PACKAGING/build-packages.sh" "$VERSION" "$RID" artifacts/release'
+
+      # Solo x64, l'architettura dei runner: il .deb si installa con apt (che verifica le dipendenze),
+      # il .rpm in un container Fedora, e .deb e AppImage si avviano davvero.
+      - name: Prova dei pacchetti
+        if: matrix.rid == 'linux-x64'
         run: |
-          name="cus-$VERSION-$RID"
-          dotnet publish src/Cus.App.Linux/Cus.App.Linux.csproj -c Release -r "$RID" --self-contained \
-            -p:Version="$VERSION" -p:DebugType=none -o "artifacts/$name"
-          test -x "artifacts/$name/cus"
-          mkdir -p artifacts/release
-          tar -czf "artifacts/release/$name.tar.gz" -C artifacts "$name"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth gnome-keyring dbus
+          sudo apt-get install -y "./artifacts/release/cus_${VERSION}_amd64.deb"
+          "$PACKAGING/smoke-test.sh" /usr/bin/cus
+          # L'AppImage si estrae (prova anche il runtime) e si avvia il suo AppRun: lanciata direttamente,
+          # timeout fermerebbe solo il runtime e CUS resterebbe aperto.
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/artifacts/release/cus-$VERSION-x86_64.AppImage" --appimage-extract > /dev/null)
+          "$PACKAGING/smoke-test.sh" "$RUNNER_TEMP/squashfs-root/AppRun"
+          docker run --rm -v "$PWD/artifacts/release:/packages:ro" fedora:42 bash -euo pipefail -c '
+            dnf install -y -q "/packages/cus-$0-1.x86_64.rpm"
+            test -x /usr/bin/cus
+            if ldd /opt/cus/libSkiaSharp.so /opt/cus/libsodium.so /opt/cus/libsqlite3mc.so | grep "not found"; then exit 1; fi
+          ' "$VERSION"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -186,12 +244,21 @@ jobs:
           cd release-files
           files=(*)
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            # Release esistente: si aggiungono solo i file nuovi (gh rifiuta quelli già presenti) e si
-            # aggiorna l'elenco degli hash, che resta valido anche per i file pubblicati prima.
+            # Release esistente: si aggiungono solo i file che mancano (quelli pubblicati non si sostituiscono)
+            # e si aggiorna l'elenco degli hash, che resta valido anche per i file pubblicati prima.
+            mapfile -t published < <(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            missing=()
+            for file in "${files[@]}"; do
+              [[ " ${published[*]} " == *" $file "* ]] || missing+=("$file")
+            done
+            if [[ ${#missing[@]} -eq 0 ]]; then
+              echo "Niente da aggiungere: la release ha già tutti i pacchetti."
+              exit 0
+            fi
             mkdir ../previous
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir ../previous || touch ../previous/SHA256SUMS.txt
-            gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"
-            { cat ../previous/SHA256SUMS.txt; sha256sum "${files[@]}"; } | sort -k2 -u > SHA256SUMS.txt
+            gh release upload "$TAG" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
+            { cat ../previous/SHA256SUMS.txt; sha256sum "${missing[@]}"; } | sort -k2 -u > SHA256SUMS.txt
             gh release upload "$TAG" SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
           else
             sha256sum "${files[@]}" > SHA256SUMS.txt
