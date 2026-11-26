@@ -1,0 +1,11 @@
+# Le action dei workflow sono fissate per SHA del commit: Dependabot propone una pull request quando
+# esce una versione nuova, aggiornando sia lo SHA sia il commento con la versione.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
