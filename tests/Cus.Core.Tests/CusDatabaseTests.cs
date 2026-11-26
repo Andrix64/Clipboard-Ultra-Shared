@@ -81,6 +81,20 @@ public sealed class CusDatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ClearHistory_RemovesEveryEntry_OfEverySession()
+    {
+        using var db = CusDatabase.Open(Paths("host"), _secrets);
+        for (var i = 1; i <= 3; i++)
+            db.AddHistory(Entry(i, ClipboardContent.FromText($"voce {i}")));
+
+        Assert.Equal(3, db.ClearHistory());
+
+        Assert.Empty(db.GetHistory());
+        db.AddHistory(Entry(4, ClipboardContent.FromText("dopo")));
+        Assert.Equal("dopo", Assert.Single(db.GetHistory()).Content.Text);
+    }
+
+    [Fact]
     public void History_StoresImagesAndFileReferences()
     {
         using var db = CusDatabase.Open(Paths("host"), _secrets);

@@ -201,6 +201,18 @@ public sealed partial class CusNode
     }
 
     /// <summary>
+    /// Cancella la cronologia salvata su questo PC. Solo fuori da una sessione o da host: la cronologia
+    /// che vede un membro sta sul PC dell'host, e non è sua da cancellare.
+    /// </summary>
+    public void ClearHistory()
+    {
+        if (_memberSession is not null)
+            throw new CusOperationException(Loc.T("session.onlyTheHostCanClearHistory"));
+        var removed = _database.ClearHistory();
+        Log(Loc.T("session.historyCleared", removed));
+    }
+
+    /// <summary>
     /// Cronologia: sull'host tutte le voci salvate; per un membro le anteprime della sessione in
     /// corso (la voce completa si chiede all'host in <see cref="UseHistoryEntryAsync"/>).
     /// </summary>

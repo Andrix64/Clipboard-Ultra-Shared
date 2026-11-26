@@ -27,6 +27,14 @@ public partial class MainWindow : Window
                 AddActivity(Loc.T("main.copiedFromHistory", Describe(entry)));
             });
         };
+        ClearHistoryButton.Click += async (_, _) => await RunFrom(ClearHistoryButton, async () =>
+        {
+            if (!await ConfirmDialog.ShowAsync(this, Loc.T("main.clearHistoryTitle"), Loc.T("main.clearHistoryMessage"), Loc.T("main.clearHistory")))
+                return;
+            node.ClearHistory();
+            await RefreshHistoryAsync();
+        });
+        node.SessionChanged += (_, _) => Post(() => ClearHistoryButton.IsVisible = node.Session?.Role != SessionRole.Member);
         node.CurrentClipboardChanged += (_, _) => Post(() =>
         {
             if (HistoryPage.IsVisible)
@@ -38,6 +46,8 @@ public partial class MainWindow : Window
     {
         if (_model.Node is not { } node)
             return;
+        // La cronologia di un membro sta sull'host: da qui la si vede soltanto.
+        ClearHistoryButton.IsVisible = node.Session?.Role != SessionRole.Member;
         HistoryTitle.Text = node.Session?.Role == SessionRole.Member
             ? Loc.T("main.copiesInThisSessionFromThe")
             : Loc.T("main.lastCopiesHostedHere");

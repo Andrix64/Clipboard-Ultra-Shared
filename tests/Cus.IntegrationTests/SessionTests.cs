@@ -82,6 +82,28 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HostClearsHistory_ForItselfAndTheMembers_MemberCannot()
+    {
+        var (andrea, luca) = (await Start("andrea"), await Start("luca"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 2, "andrea vede luca");
+        andrea.Copy("da dimenticare");
+        await Eventually.TrueAsync(() => luca.Text == "da dimenticare", "luca riceve la copia");
+        var entry = Assert.Single(await luca.Node.GetHistoryAsync());
+
+        // La cronologia sta sull'host: il membro non può cancellarla.
+        Assert.Throws<CusOperationException>(() => luca.Node.ClearHistory());
+        Assert.Single(await andrea.Node.GetHistoryAsync());
+
+        andrea.Node.ClearHistory();
+
+        Assert.Empty(await andrea.Node.GetHistoryAsync());
+        Assert.Empty(await luca.Node.GetHistoryAsync());
+        await Assert.ThrowsAnyAsync<Exception>(() => luca.Node.UseHistoryEntryAsync(entry));
+    }
+
+    [Fact]
     public async Task LateJoiner_SeesOnlyTheHistoryFromWhenItJoined()
     {
         var (andrea, luca, sara) = (await Start("andrea"), await Start("luca"), await Start("sara"));
