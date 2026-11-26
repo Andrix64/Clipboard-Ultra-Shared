@@ -1,0 +1,88 @@
+# Pubblica una release di CUS quando si fa push di un tag vX.Y.Z: test, scripts/publish.ps1
+# (app self-contained + installer Inno Setup) e GitHub Release con installer e zip della
+# cartella pubblicata. Niente suffissi (-beta.1): VersionInfoVersion in installer/cus.iss
+# accetta solo numeri.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  INNO_SETUP_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe
+  INNO_SETUP_SHA256: 8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0
+
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write   # serve solo per creare la release
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Versione dal tag
+        id: version
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Tag non valido (atteso vX.Y.Z): ${{ github.ref_name }}" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      # Cus.Platform.Windows.Tests è escluso: tocca la clipboard di sistema e richiede una
+      # sessione desktop interattiva, che il runner non garantisce. Va eseguito in locale prima del tag.
+      - name: Test
+        run: |
+          dotnet test tests/Cus.Core.Tests/Cus.Core.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test tests/Cus.IntegrationTests/Cus.IntegrationTests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Inno Setup 7 non è sul runner né su Chocolatey: installer ufficiale con hash verificato.
+      - name: Installa Inno Setup
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $env:INNO_SETUP_URL -OutFile $setup
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+          if ($hash -ne $env:INNO_SETUP_SHA256) { throw "SHA256 di Inno Setup non corrisponde: $hash" }
+          $dir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          Start-Process $setup -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=$dir"
+          $iscc = Join-Path $dir 'ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe non trovato in $dir" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Pubblica e crea l'installer
+        run: ./scripts/publish.ps1 -Version '${{ steps.version.outputs.version }}' -Iscc $env:ISCC
+
+      - name: Zip della versione portabile
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          Compress-Archive -Path artifacts/publish/win-x64/* -DestinationPath "artifacts/installer/cus-$version-win-x64.zip"
+          Get-ChildItem artifacts/installer | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content artifacts/installer/SHA256SUMS.txt
+
+      - name: Crea la GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ github.ref_name }}' (Get-ChildItem artifacts/installer).FullName `
+            --generate-notes --verify-tag --title 'CUS ${{ steps.version.outputs.version }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
