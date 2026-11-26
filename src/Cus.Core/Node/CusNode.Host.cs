@@ -240,12 +240,16 @@ public sealed partial class CusNode
     /// sessioni precedenti (magari con altre persone) non li riguardano, e le voci complete con
     /// immagini e testi lunghi non entrerebbero in un messaggio.
     /// </summary>
+    /// <summary>La cronologia della sessione che un membro può vedere: solo le copie fatte da quando è entrato.</summary>
     private IReadOnlyList<HistoryEntry> SessionHistoryPreviews(PeerConnection connection)
     {
         var session = _hostSession;
-        if (session is null || !session.Members.Values.Any(m => m.Connection == connection))
+        if (session is null || session.Members.Values.FirstOrDefault(m => m.Connection == connection) is not { } member)
             return [];
-        return _database.GetHistory(session.Id).Select(h => h.ToPreview()).ToList();
+        return _database.GetHistory(session.Id)
+            .Where(h => h.Sequence > member.JoinedAfterSequence)
+            .Select(h => h.ToPreview())
+            .ToList();
     }
 
     private async Task SendHistoryItemAsync(PeerConnection connection, HistoryItemRequestMessage request)
@@ -253,9 +257,11 @@ public sealed partial class CusNode
         var session = _hostSession;
         HistoryEntry? entry = null;
         string? error = null;
-        if (session is null || !session.Members.Values.Any(m => m.Connection == connection))
+        if (session is null || session.Members.Values.FirstOrDefault(m => m.Connection == connection) is not { } member)
             error = WireTexts.NotInSession.Text;
-        else if ((entry = _database.GetHistoryEntry(request.ItemId)) is null || entry.SessionId != session.Id)
+        // Una voce di prima dell'ingresso risponde come una che non c'è: il membro non deve sapere che esiste.
+        else if ((entry = _database.GetHistoryEntry(request.ItemId)) is null || entry.SessionId != session.Id
+                 || entry.Sequence <= member.JoinedAfterSequence)
             error = WireTexts.HistoryItemGone.Text;
 
         try

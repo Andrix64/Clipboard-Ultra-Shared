@@ -8,9 +8,13 @@ public sealed partial class CusNode
 {
     // ================================================================ scoperta
 
-    /// <summary>Annuncio di questo PC: solo mentre si offre come host.</summary>
+    /// <summary>
+    /// Annuncio di questo PC: solo mentre si offre come host. Gli annunci non sono cifrati e li riceve
+    /// chiunque sia in rete, quindi il nome utente del sistema non c'è (resta vuoto: per le versioni che lo
+    /// mostrano, vuoto vuol dire "non mostrarlo"). Lo vede solo chi si collega, nel saluto cifrato.
+    /// </summary>
     private AnnouncementPayload? AnnouncementOrNull() =>
-        _visible ? new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, Identity.UserName, Port, Math.Max(1, Session?.Participants.Count ?? 1)) : null;
+        _visible ? new AnnouncementPayload(Identity.DeviceId, Identity.DisplayName, UserName: "", Port, Math.Max(1, Session?.Participants.Count ?? 1)) : null;
 
     private void OnAnnounced(DiscoveryAnnouncement announcement)
     {

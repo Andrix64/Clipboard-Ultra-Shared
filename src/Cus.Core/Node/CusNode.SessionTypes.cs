@@ -57,9 +57,16 @@ public sealed partial class CusNode
     }
 
     /// <summary>Membro visto dall'host. Modificato sotto _gate.</summary>
-    private sealed class Member(PeerConnection connection, ShareDirection granted)
+    /// <param name="joinedAfterSequence">Ultimo numero di sequenza della sessione quando il membro è entrato.</param>
+    private sealed class Member(PeerConnection connection, ShareDirection granted, long joinedAfterSequence)
     {
         public PeerConnection Connection { get; } = connection;
+
+        /// <summary>
+        /// La cronologia che il membro può vedere parte da qui: le copie fatte prima che entrasse non le ha
+        /// ricevute e l'host, accettandolo, non gliele ha concesse (vale anche per chi entra in sola lettura).
+        /// </summary>
+        public long JoinedAfterSequence { get; } = joinedAfterSequence;
 
         /// <summary>Messaggi dell'host per questo membro, in ordine (vedi <see cref="Post"/>).</summary>
         public MemberOutbox Outbox { get; } = new();

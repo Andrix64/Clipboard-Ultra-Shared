@@ -26,6 +26,27 @@ public sealed class DiscoveryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Announcements_DoNotCarryTheSystemUserName()
+    {
+        var port = Random.Shared.Next(40000, 45000);
+        var options = TestNode.DefaultOptions() with { EnableDiscovery = true, DiscoveryPort = port };
+        var a = await TestNode.StartAsync(_root.Path, "a", options);
+        var b = await TestNode.StartAsync(_root.Path, "b", options);
+        _nodes.AddRange([a, b]);
+        Assert.NotEmpty(b.Node.Identity.UserName);
+
+        await b.ShowAsync();
+        await Eventually.TrueAsync(
+            () => a.Node.Peers.Any(p => p.DeviceId == b.Node.Identity.DeviceId && p.IsAnnounced),
+            "a vede b che si offre", timeoutMs: 15000);
+
+        // Chiunque in rete riceve gli annunci: il nome utente del sistema non deve esserci.
+        var peerB = a.Node.Peers.First(p => p.DeviceId == b.Node.Identity.DeviceId && p.IsAnnounced);
+        Assert.Equal("", peerB.UserName);
+        Assert.Equal(b.Node.Identity.DisplayName, peerB.DisplayName);
+    }
+
+    [Fact]
     public async Task OnlyVisibleHosts_AreSeen_WithTheirParticipantCount()
     {
         var port = Random.Shared.Next(40000, 45000);

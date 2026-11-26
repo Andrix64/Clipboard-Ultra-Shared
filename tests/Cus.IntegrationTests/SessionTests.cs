@@ -82,6 +82,32 @@ public sealed class SessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LateJoiner_SeesOnlyTheHistoryFromWhenItJoined()
+    {
+        var (andrea, luca, sara) = (await Start("andrea"), await Start("luca"), await Start("sara"));
+        await andrea.ShowAsync();
+        await luca.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 2, "andrea vede luca");
+        andrea.Copy("prima di sara");
+        await Eventually.TrueAsync(() => luca.Text == "prima di sara", "luca riceve la copia");
+        var before = Assert.Single(await luca.Node.GetHistoryAsync());
+
+        // Sara entra (in sola lettura): la cronologia di prima non è sua.
+        andrea.Consent.Decision = ConsentDecision.AcceptReadOnly;
+        await sara.JoinAsync(andrea);
+        await Eventually.TrueAsync(() => andrea.Node.Session?.Participants.Count == 3, "andrea vede sara");
+        Assert.Empty(await sara.Node.GetHistoryAsync());
+        // Neanche chiedendo una voce precisa di prima.
+        await Assert.ThrowsAnyAsync<Exception>(() => sara.Node.UseHistoryEntryAsync(before));
+        Assert.NotEqual("prima di sara", sara.Text);
+
+        andrea.Copy("dopo sara");
+        await Eventually.TrueAsync(() => sara.Text == "dopo sara", "sara riceve la copia nuova");
+        Assert.Contains("dopo sara", Assert.Single(await sara.Node.GetHistoryAsync()).Describe(), StringComparison.Ordinal);
+        Assert.Equal(2, (await luca.Node.GetHistoryAsync()).Count);
+    }
+
+    [Fact]
     public async Task Rename_IsSeenByTheOthersInTheSession_AndByTheHost()
     {
         var (andrea, luca) = (await Start("andrea"), await Start("luca"));

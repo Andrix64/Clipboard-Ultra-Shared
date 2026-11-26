@@ -367,7 +367,7 @@ public sealed partial class CusNode
     {
         var session = _hostSession!;
         await connection.SendAsync(new JoinReplyMessage(true, session.Id, granted, null));
-        var member = new Member(connection, granted);
+        var member = new Member(connection, granted, joinedAfterSequence: session.Sequence);
         session.Members[connection.Remote.DeviceId] = member;
         connection.MessageHandler = HostHandleMessageAsync;
         connection.Closed += (c, reason) =>
