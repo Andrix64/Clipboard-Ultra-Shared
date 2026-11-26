@@ -61,8 +61,11 @@ public class SecureChannelTests
         // risultava "alterato o fuori ordine".
         await aChannel.SendAsync(new byte[] { 7, 8, 9 }, default);
         Assert.Equal(new byte[] { 7, 8, 9 }, await bChannel.ReceiveAsync(default));
+        // La ricezione parte prima dell'invio: un messaggio massimo supera i buffer del socket in
+        // loopback su Linux, e senza nessuno che legge l'invio resterebbe bloccato per sempre.
+        var largest = bChannel.ReceiveAsync(default);
         await aChannel.SendAsync(new byte[SecureChannel.MaxMessageBytes], default);
-        Assert.Equal(SecureChannel.MaxMessageBytes, (await bChannel.ReceiveAsync(default)).Length);
+        Assert.Equal(SecureChannel.MaxMessageBytes, (await largest).Length);
     }
 
     [Fact]
