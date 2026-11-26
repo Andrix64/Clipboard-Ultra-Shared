@@ -228,7 +228,7 @@ public sealed class AvaloniaOverlayIndicator(Func<Screens?> screens, Action<Wind
             },
         }, cornerRadius: 12);
         content.Cursor = new Cursor(StandardCursorType.Hand);
-        ToolTip.SetTip(content, Loc.T("overlay.doubleClickToLeaveTheSession2"));
+        ToolTip.SetTip(content, Loc.T("overlay.doubleClickToLeaveTheSessionTip"));
         content.PointerPressed += (_, e) =>
         {
             // Solo un doppio clic sinistro deliberato: i clic accidentali sull'angolo in alto a destra

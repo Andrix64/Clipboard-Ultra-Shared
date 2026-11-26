@@ -752,7 +752,7 @@ public sealed partial class CusNode
             {
                 session.Members.TryRemove(connection.Remote.DeviceId, out _);
                 changed = true;
-                Log(Loc.T("session.leftTheSession2", connection.Remote.DisplayName, reason));
+                Log(Loc.T("session.leftTheSessionWithReason", connection.Remote.DisplayName, reason));
 
                 // Senza membri la sessione finisce. Mentre ci si offre ne parte subito una nuova, vuota:
                 // chi entra dopo non eredita la cronologia né il permesso temporaneo per le password
@@ -848,7 +848,7 @@ public sealed partial class CusNode
             {
                 var reason = WireTexts.Localize(DisplayText.Sanitize(reply.Reason, 200, WireTexts.RequestDeclined.Text));
                 connection.Close(Loc.T("session.declined"));
-                Log(Loc.T("session.declined2", remote.DisplayName, reason));
+                Log(Loc.T("session.declinedWithReason", remote.DisplayName, reason));
                 return new JoinResult(JoinOutcome.Rejected, remote.DisplayName, reason);
             }
 
@@ -1000,7 +1000,7 @@ public sealed partial class CusNode
                 RunInBackground(() => HandleAgreementProposalAsync(connection, proposal));
                 break;
             case SessionEndedMessage ended:
-                _notifier.Info(Loc.T("session.sessionEnded2", WireTexts.Localize(DisplayText.Sanitize(ended.Reason, 200, Loc.T("session.closedByTheHost")))));
+                _notifier.Info(Loc.T("session.sessionEndedWithReason", WireTexts.Localize(DisplayText.Sanitize(ended.Reason, 200, Loc.T("session.closedByTheHost")))));
                 if (_memberSession is { } current && current.Host == connection)
                     current.EndedByHost = true;
                 connection.Close(ended.Reason);

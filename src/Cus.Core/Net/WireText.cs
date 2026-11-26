@@ -5,55 +5,54 @@ namespace Cus.Core.Net;
 
 /// <summary>
 /// Testo che viaggia in rete (motivi di rifiuto, di chiusura, errori nelle risposte) e che l'altro PC
-/// mostra. Si invia nella lingua di chi lo manda; chi lo riceve lo riconosce in una delle due lingue
-/// e lo mostra nella propria (<see cref="WireTexts.Localize"/>). Il protocollo non cambia: resta una stringa.
+/// mostra. Si invia nella lingua di chi lo manda; chi lo riceve lo riconosce in una qualunque delle lingue
+/// disponibili e lo mostra nella propria (<see cref="WireTexts.Localize"/>). Il protocollo non cambia: resta una stringa.
 /// </summary>
-public sealed class WireText
+/// <param name="key">Chiave nei file di lingua; il testo usa i segnaposto <c>{0}</c>, <c>{1}</c>... per le parti variabili.</param>
+public sealed class WireText(string key)
 {
-    private readonly Regex _italian;
-    private readonly Regex _english;
+    /// <summary>Un modello per lingua, in cui i segnaposto diventano gruppi.</summary>
+    private readonly Regex[] _patterns =
+    [
+        .. Loc.Available
+            .Select(l => Loc.Template(l.Code, key))
+            .OfType<string>()
+            .Distinct()
+            .Select(Pattern),
+    ];
 
-    /// <param name="italian">Testo italiano, con segnaposto <c>{0}</c>, <c>{1}</c>... per le parti variabili.</param>
-    /// <param name="english">Lo stesso testo in inglese, con gli stessi segnaposto.</param>
-    public WireText(string italian, string english)
-    {
-        Italian = italian;
-        English = english;
-        _italian = Pattern(italian);
-        _english = Pattern(english);
-    }
-
-    public string Italian { get; }
-
-    public string English { get; }
+    public string Key { get; } = key;
 
     /// <summary>Il testo nella lingua corrente (senza parti variabili).</summary>
-    public string Text => Loc.T(Italian, English);
+    public string Text => Loc.T(Key);
 
     /// <summary>Il testo nella lingua corrente con le parti variabili.</summary>
-    public string Format(params object?[] args) => string.Format(CultureInfo.CurrentCulture, Text, args);
+    public string Format(params object?[] args) => Loc.T(Key, args);
 
-    /// <summary>Vero se il testo è questo, in una delle due lingue.</summary>
-    public bool Matches(string? text) => text is not null && (_italian.IsMatch(text) || _english.IsMatch(text));
+    /// <summary>Vero se il testo è questo, in una qualunque lingua.</summary>
+    public bool Matches(string? text) => text is not null && _patterns.Any(p => p.IsMatch(text));
 
     internal bool TryLocalize(string text, out string localized)
     {
-        var match = _italian.Match(text);
-        if (!match.Success)
-            match = _english.Match(text);
-        if (!match.Success)
+        foreach (var pattern in _patterns)
         {
-            localized = text;
-            return false;
+            var match = pattern.Match(text);
+            if (match.Success)
+            {
+                // Per nome, non per posizione: in un'altra lingua i segnaposto possono essere in ordine diverso.
+                var count = match.Groups.Keys.Count(k => k.StartsWith('p'));
+                localized = Format([.. Enumerable.Range(0, count).Select(i => (object?)match.Groups[$"p{i}"].Value)]);
+                return true;
+            }
         }
 
-        localized = Format([.. match.Groups.Cast<Group>().Skip(1).Select(g => (object?)g.Value)]);
-        return true;
+        localized = text;
+        return false;
     }
 
     private static Regex Pattern(string template)
     {
-        var pattern = Regex.Replace(Regex.Escape(template), @"\\\{\d+}", "(.*)");
+        var pattern = Regex.Replace(Regex.Escape(template), @"\\\{(\d+)}", m => $"(?<p{m.Groups[1].Value}>.*)");
         return new Regex($"^{pattern}$", RegexOptions.Singleline | RegexOptions.CultureInvariant);
     }
 }

@@ -5,21 +5,20 @@ using Avalonia.Threading;
 namespace Cus.UI;
 
 /// <summary>
-/// Testo tradotto nello XAML: <c>Text="{ui:Tr 'CRONOLOGIA', 'HISTORY'}"</c>. Restituisce il testo nella
+/// Testo tradotto nello XAML: <c>Text="{ui:Tr main.history}"</c>. Restituisce il testo nella
 /// lingua corrente e, quando la lingua cambia, lo riscrive sulla proprietà di destinazione.
 /// </summary>
-public sealed class Tr(string italian, string english) : MarkupExtension
+/// <param name="key">Chiave nei file di lingua (vedi <see cref="Loc"/>).</param>
+public sealed class Tr(string key) : MarkupExtension
 {
     /// <summary>Destinazioni ancora vive da aggiornare al cambio di lingua.</summary>
     private static readonly List<(WeakReference<AvaloniaObject> Target, AvaloniaProperty Property, Tr Text)> s_targets = [];
 
     static Tr() => Loc.Changed += () => Dispatcher.UIThread.Post(UpdateAll);
 
-    public string Italian { get; } = italian;
+    public string Key { get; } = key;
 
-    public string English { get; } = english;
-
-    public string Text => Loc.T(Italian, English);
+    public string Text => Loc.T(Key);
 
     public override object ProvideValue(IServiceProvider serviceProvider)
     {

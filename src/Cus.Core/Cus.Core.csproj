@@ -15,6 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Una lingua per file (codice.json): per aggiungerne una basta un file nuovo qui (vedi Loc.cs). -->
+    <EmbeddedResource Include="Localization\Languages\*.json" LogicalName="Cus.Core.Localization.Languages.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Cus.Core.Tests" />
   </ItemGroup>
 

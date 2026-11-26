@@ -45,7 +45,7 @@ public sealed record ClipboardSummary(
             ClipboardContentKind.Text => (Loc.T("content.textOfCharacters", (content.Text ?? "").Length), (long)System.Text.Encoding.UTF8.GetByteCount(content.Text ?? "")),
             ClipboardContentKind.Image => (Loc.T("content.image"), (long)(content.ImagePng?.Length ?? 0)),
             ClipboardContentKind.Files => (DescribeFiles(content.Files ?? []), content.Files?.Sum(f => f.SizeBytes) ?? 0),
-            _ => (Loc.T("content.unknownContent2"), 0L),
+            _ => (Loc.T("content.unknownContentTitle"), 0L),
         };
         return new(originDeviceId, originName, content.Kind, title, size, false, isShared);
     }

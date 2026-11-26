@@ -233,14 +233,17 @@ public sealed partial class CusNode : IAsyncDisposable
         set => _database.SetSetting("ui/run-in-background", value ? "1" : "0");
     }
 
-    /// <summary>Lingua dell'interfaccia scelta dall'utente; null se non l'ha mai scelta (vale quella dell'installer).</summary>
-    public AppLanguage? SavedLanguage
+    /// <summary>
+    /// Codice della lingua dell'interfaccia scelta dall'utente; null se non l'ha mai scelta (vale quella
+    /// dell'installer) o se non è più disponibile.
+    /// </summary>
+    public string? SavedLanguage
     {
         get => Loc.Parse(_database.GetSetting(Loc.SettingKey));
         set
         {
-            if (value is { } language)
-                _database.SetSetting(Loc.SettingKey, Loc.ToCode(language));
+            if (Loc.Parse(value) is { } code)
+                _database.SetSetting(Loc.SettingKey, code);
         }
     }
 

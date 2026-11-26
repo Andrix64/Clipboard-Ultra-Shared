@@ -42,9 +42,11 @@ PrivilegesRequiredOverridesAllowed=dialog
 CloseApplications=yes
 RestartApplications=no
 
+; Il nome di ogni lingua è il codice del suo file in src/Cus.Core/Localization/Languages (it.json, en.json...):
+; finisce in cus.ini e l'app lo usa così com'è. Una lingua nuova dell'app va aggiunta anche qui.
 [Languages]
-Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -52,7 +54,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Lingua scelta nel dialogo dell'installer ({language} = "italian" o "english"): CUS la usa finché
+; Lingua scelta nel dialogo dell'installer ({language} = "it", "en"...): CUS la usa finché
 ; l'utente non ne sceglie un'altra nelle impostazioni (vedi src/Cus.Core/Localization/Loc.cs).
 [INI]
 Filename: "{app}\cus.ini"; Section: "Setup"; Key: "Language"; String: "{language}"
