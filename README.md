@@ -17,6 +17,14 @@ Share your clipboard in real time with other PCs on the same local network: with
 
 ![Always-on-top indicator](docs/screenshots/indicator.png)
 
+## Download
+
+Every [release](../../releases) contains:
+
+- Windows: `cus-setup-<version>-win-x64.exe` (installer) or `cus-<version>-win-x64.zip` (portable);
+- Linux: `cus-<version>-linux-x64.tar.gz` or `cus-<version>-linux-arm64.tar.gz`, self-contained (no .NET runtime needed). Extract it and run `./cus` from the extracted folder;
+- `SHA256SUMS.txt` to verify the downloads (`sha256sum -c SHA256SUMS.txt --ignore-missing`).
+
 ## Requirements
 
 - Windows 10 1809 or later, or Linux (x64/arm64) with an X11 session or a Wayland session with XWayland (GNOME, KDE Plasma and most desktops)
