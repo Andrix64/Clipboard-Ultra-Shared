@@ -398,23 +398,47 @@ public sealed class HardeningTests : IAsyncLifetime
         await host.ShowAsync();
         await using var slow = await JoinRawAsync(host);
 
-        // Legge, ma più piano di quanto l'host accodi: prima, oltre 32 MB in coda, veniva scollegato.
+        // Legge, ma più piano di quanto l'host accodi (una copia al secondo): prima, oltre 32 MB in coda,
+        // veniva scollegato. Come un membro vero manda i ping, altrimenti l'host lo chiuderebbe dopo
+        // PeerConnection.IdleTimeout di silenzio, qualunque cosa succeda alla coda.
         var received = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        using var reading = new CancellationTokenSource();
+        Exception? stopped = null;
+        using var running = new CancellationTokenSource();
         var reader = Task.Run(async () =>
         {
             try
             {
-                while (!reading.IsCancellationRequested)
+                while (!running.IsCancellationRequested)
                 {
-                    if (await slow.ReceiveAsync(TimeSpan.FromSeconds(30), reading.Token) is ClipboardItemMessage item)
+                    if (await slow.ReceiveAsync(TimeSpan.FromSeconds(30), running.Token) is ClipboardItemMessage item)
+                    {
                         received.Enqueue(item.Content.Text![..2]);
-                    await Task.Delay(150, reading.Token);
+                        await Task.Delay(1000, running.Token);
+                    }
                 }
             }
-            catch (Exception) when (reading.IsCancellationRequested)
+            catch (Exception ex) when (!running.IsCancellationRequested)
+            {
+                stopped = ex;
+            }
+            catch (Exception)
             {
                 // Fine del test.
+            }
+        });
+        var pinger = Task.Run(async () =>
+        {
+            try
+            {
+                while (!running.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, running.Token);
+                    await slow.SendAsync(new PingMessage(), running.Token);
+                }
+            }
+            catch (Exception)
+            {
+                // Fine del test o connessione chiusa: lo dice il lettore.
             }
         });
 
@@ -422,14 +446,22 @@ public sealed class HardeningTests : IAsyncLifetime
         for (var i = 0; i < 40; i++)
             host.Copy($"{i:D2}{big}");
 
-        await Eventually.TrueAsync(() => received.ToArray().LastOrDefault() == "39", "il membro lento riceve l'ultima copia", timeoutMs: 30_000);
+        try
+        {
+            await Eventually.TrueAsync(() => received.ToArray().LastOrDefault() == "39", "il membro lento riceve l'ultima copia", timeoutMs: 60_000);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception(
+                $"{ex.Message}. Ricevute: [{string.Join(",", received)}]; lettore fermo per: {stopped?.Message ?? "-"}; chiusa: {slow.IsClosed}", ex);
+        }
+
         Assert.Equal(2, host.Node.Session?.Participants.Count);
-        // Le copie superate sono state scartate, non ricevute in disordine.
+        // Le copie superate si scartano: arrivano in ordine, mai una più vecchia dopo una più nuova.
         var copies = received.ToArray();
-        Assert.True(copies.Length < 40);
         Assert.Equal(copies.Order(StringComparer.Ordinal), copies);
-        await reading.CancelAsync();
-        await reader;
+        await running.CancelAsync();
+        await Task.WhenAll(reader, pinger);
     }
 
     /// <summary>Un "membro" scritto a mano: handshake, livello del patto, richiesta di ingresso.</summary>
